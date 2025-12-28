@@ -14,8 +14,10 @@ class VirtualController:
         self.axes = [0.0] * 4  # 4 axes: wheel, throttle, brake, etc.
         self.buttons = [False] * 16
         self.hats = [(0, 0)]
-        self.wheel_angle = 0.0  # -1.0 to 1.0
+        self.wheel_angle = 0.0  # Continuous rotation, no limits
         self.arrow_keys = {'left': False, 'right': False}
+        self.arrow_key_sensitivity = 0.02  # Adjustable sensitivity
+        self.auto_center_speed = 0.95  # Adjustable auto-center speed (0.0-1.0)
         
     def get_info(self):
         return {
@@ -26,6 +28,10 @@ class VirtualController:
         }
     
     def get_state(self):
+        # Map continuous angle to -1.0 to 1.0 for axis output
+        # Use modulo to get current rotation within one full turn
+        normalized = math.sin(math.radians(self.wheel_angle))
+        self.axes[0] = normalized
         return {
             'axes': self.axes.copy(),
             'buttons': self.buttons.copy(),
@@ -33,23 +39,35 @@ class VirtualController:
         }
     
     def set_wheel_angle(self, angle):
-        """Set wheel angle (-1.0 to 1.0)"""
-        self.wheel_angle = max(-1.0, min(1.0, angle))
-        self.axes[0] = self.wheel_angle
+        """Set wheel angle (continuous, no limits)"""
+        self.wheel_angle = angle  # Allow any angle value
+    
+    def set_arrow_key_sensitivity(self, sensitivity):
+        """Set arrow key sensitivity (0.001 to 0.1)"""
+        self.arrow_key_sensitivity = max(0.001, min(0.1, sensitivity))
+    
+    def set_auto_center_speed(self, speed):
+        """Set auto-center speed (0.0 to 1.0, higher = faster return)"""
+        self.auto_center_speed = max(0.0, min(1.0, speed))
     
     def update_arrow_keys(self, left, right):
         """Update arrow key state"""
         self.arrow_keys['left'] = left
         self.arrow_keys['right'] = right
-        # Apply arrow key input to wheel
+        # Apply arrow key input to wheel with adjustable sensitivity
         if left and not right:
-            self.set_wheel_angle(self.wheel_angle - 0.05)
+            self.set_wheel_angle(self.wheel_angle - self.arrow_key_sensitivity * 180)
         elif right and not left:
-            self.set_wheel_angle(self.wheel_angle + 0.05)
+            self.set_wheel_angle(self.wheel_angle + self.arrow_key_sensitivity * 180)
         elif not left and not right:
-            # Return to center slowly
-            if abs(self.wheel_angle) > 0.01:
-                self.set_wheel_angle(self.wheel_angle * 0.95)
+            # Return to center slowly with adjustable speed
+            if abs(self.wheel_angle) > 0.5:
+                # Calculate target (nearest multiple of 360)
+                target = round(self.wheel_angle / 360.0) * 360.0
+                diff = target - self.wheel_angle
+                self.set_wheel_angle(self.wheel_angle + diff * (1.0 - self.auto_center_speed))
+            else:
+                self.wheel_angle = 0.0
 
 class WheelWidget(Canvas):
     """Interactive wheel widget that can be dragged"""
@@ -81,6 +99,11 @@ class WheelWidget(Canvas):
         """Draw the wheel"""
         self.delete("all")
         
+        # Use angle modulo 360 for visual display (continuous rotation)
+        display_angle = self.angle % 360
+        if display_angle < 0:
+            display_angle += 360
+        
         # Draw outer circle
         self.create_oval(
             self.center_x - self.radius,
@@ -106,7 +129,7 @@ class WheelWidget(Canvas):
         # Draw spokes (rotating with wheel)
         spoke_length = self.radius - 20
         for i in range(4):
-            angle_rad = math.radians(self.angle + i * 90)
+            angle_rad = math.radians(display_angle + i * 90)
             x1 = self.center_x + math.cos(angle_rad) * 20
             y1 = self.center_y + math.sin(angle_rad) * 20
             x2 = self.center_x + math.cos(angle_rad) * spoke_length
@@ -114,7 +137,7 @@ class WheelWidget(Canvas):
             self.create_line(x1, y1, x2, y2, fill='#ffffff', width=2)
         
         # Draw top indicator
-        indicator_angle = math.radians(self.angle)
+        indicator_angle = math.radians(display_angle)
         indicator_x = self.center_x + math.cos(indicator_angle) * (self.radius - 5)
         indicator_y = self.center_y + math.sin(indicator_angle) * (self.radius - 5)
         self.create_oval(
@@ -127,20 +150,28 @@ class WheelWidget(Canvas):
             width=2
         )
         
-        # Draw angle text
-        angle_text = f"{self.angle:.1f}°"
+        # Draw angle text (show full rotations)
+        rotations = int(self.angle / 360)
+        remainder = self.angle % 360
+        if remainder > 180:
+            remainder -= 360
+        if rotations != 0:
+            angle_text = f"{remainder:.1f}° ({rotations:+d} rot)"
+        else:
+            angle_text = f"{remainder:.1f}°"
         self.create_text(
             self.center_x,
             self.center_y + self.radius + 20,
             text=angle_text,
             fill='#ffffff',
-            font=("Arial", 12, "bold")
+            font=("Arial", 11, "bold")
         )
     
     def on_click(self, event):
         """Handle mouse click"""
         self.dragging = True
         self.auto_return_active = False
+        self.last_drag_angle = None  # Reset for continuous rotation tracking
         self.calculate_angle(event.x, event.y)
     
     def on_drag(self, event):
@@ -154,42 +185,65 @@ class WheelWidget(Canvas):
         self.auto_return_active = True
     
     def calculate_angle(self, x, y):
-        """Calculate angle from center to mouse position"""
+        """Calculate angle from center to mouse position (continuous rotation)"""
         dx = x - self.center_x
         dy = y - self.center_y
         angle_rad = math.atan2(dy, dx)
-        self.angle = math.degrees(angle_rad)
+        new_angle = math.degrees(angle_rad)
         
-        # Normalize to -180 to 180
-        if self.angle > 180:
-            self.angle -= 360
-        if self.angle < -180:
-            self.angle += 360
+        # Handle continuous rotation - track relative movement
+        if hasattr(self, 'last_drag_angle') and self.last_drag_angle is not None:
+            # Calculate shortest rotation direction
+            diff = new_angle - self.last_drag_angle
+            if diff > 180:
+                diff -= 360
+            elif diff < -180:
+                diff += 360
+            # Add the difference to current angle (allows continuous rotation)
+            self.angle += diff
+        else:
+            # First drag - align with current visual angle
+            current_display = self.angle % 360
+            if current_display < 0:
+                current_display += 360
+            # Calculate offset to match new angle
+            offset = new_angle - current_display
+            if offset > 180:
+                offset -= 360
+            elif offset < -180:
+                offset += 360
+            self.angle = self.angle + offset
         
-        # Update virtual controller
-        normalized = self.angle / 180.0  # -1.0 to 1.0
-        self.virtual_controller.set_wheel_angle(normalized)
+        self.last_drag_angle = new_angle
+        
+        # Update virtual controller (continuous angle)
+        self.virtual_controller.set_wheel_angle(self.angle)
         
         self.draw_wheel()
     
     def set_angle(self, angle):
-        """Set wheel angle programmatically (in degrees)"""
-        self.angle = max(-180, min(180, angle))
-        normalized = self.angle / 180.0
-        self.virtual_controller.set_wheel_angle(normalized)
+        """Set wheel angle programmatically (in degrees, continuous)"""
+        self.angle = angle  # No limits, allow continuous rotation
+        self.virtual_controller.set_wheel_angle(angle)
         self.draw_wheel()
     
     def update(self):
-        """Update wheel (for auto-return)"""
+        """Update wheel (for auto-return to nearest 360° multiple)"""
         if self.auto_return_active and not self.dragging:
-            if abs(self.angle) > 0.5:
-                self.angle *= 0.95
-                normalized = self.angle / 180.0
-                self.virtual_controller.set_wheel_angle(normalized)
+            vc = self.virtual_controller
+            current_angle = vc.wheel_angle
+            
+            if abs(current_angle) > 0.5:
+                # Calculate target (nearest multiple of 360)
+                target = round(current_angle / 360.0) * 360.0
+                diff = target - current_angle
+                new_angle = current_angle + diff * (1.0 - vc.auto_center_speed)
+                vc.set_wheel_angle(new_angle)
+                self.angle = new_angle
                 self.draw_wheel()
-            elif abs(self.angle) <= 0.5:
+            else:
+                vc.set_wheel_angle(0.0)
                 self.angle = 0.0
-                self.virtual_controller.set_wheel_angle(0.0)
                 self.draw_wheel()
 
 class ControllerManager:
@@ -436,45 +490,16 @@ class ServoControlApp:
         self.debug_status = ttk.Label(arduino_frame, text="", font=("Arial", 8), foreground="gray")
         self.debug_status.grid(row=2, column=0, columnspan=4, pady=2)
         
-        # Servo mappings
-        mapping_frame = ttk.LabelFrame(right_panel, text="Servo Mappings", padding="5")
-        mapping_frame.grid(row=1, column=0, sticky=(W, E, N, S), pady=5)
-        
-        # Servo mapping list
-        columns = ("Servo", "Controller", "Input Type", "Input ID", "Value")
-        self.mapping_tree = ttk.Treeview(mapping_frame, columns=columns, show="headings", height=10)
-        for col in columns:
-            self.mapping_tree.heading(col, text=col)
-            self.mapping_tree.column(col, width=100)
-        
-        self.mapping_tree.grid(row=0, column=0, columnspan=3, sticky=(W, E, N, S))
-        
-        mapping_scroll = ttk.Scrollbar(mapping_frame, orient=VERTICAL, command=self.mapping_tree.yview)
-        mapping_scroll.grid(row=0, column=3, sticky=(N, S))
-        self.mapping_tree.configure(yscrollcommand=mapping_scroll.set)
-        
-        # Add mapping controls
-        add_frame = ttk.Frame(mapping_frame)
-        add_frame.grid(row=1, column=0, columnspan=4, sticky=(W, E), pady=5)
-        
-        ttk.Label(add_frame, text="Servo ID:").grid(row=0, column=0, padx=2)
-        self.servo_id_var = StringVar(value="0")
-        ttk.Spinbox(add_frame, from_=0, to=15, textvariable=self.servo_id_var, width=5).grid(row=0, column=1, padx=2)
-        
-        ttk.Label(add_frame, text="Input:").grid(row=0, column=2, padx=2)
-        self.input_type_var = StringVar(value="axis")
-        ttk.Combobox(add_frame, textvariable=self.input_type_var, values=["axis", "button", "hat"], 
-                    state="readonly", width=8).grid(row=0, column=3, padx=2)
-        
-        self.input_id_var = StringVar(value="0")
-        ttk.Spinbox(add_frame, from_=0, to=15, textvariable=self.input_id_var, width=5).grid(row=0, column=4, padx=2)
-        
-        ttk.Button(add_frame, text="Add Mapping", command=self.add_mapping).grid(row=0, column=5, padx=5)
-        ttk.Button(add_frame, text="Remove", command=self.remove_mapping).grid(row=0, column=6, padx=5)
+        # Container for wheel and mappings side by side
+        wheel_mapping_container = ttk.Frame(right_panel)
+        wheel_mapping_container.grid(row=1, column=0, sticky=(W, E, N, S), pady=5)
+        wheel_mapping_container.columnconfigure(0, weight=1)
+        wheel_mapping_container.columnconfigure(1, weight=1)
+        wheel_mapping_container.rowconfigure(0, weight=1)
         
         # Interactive wheel widget (shown when virtual controller is selected)
-        wheel_frame = ttk.LabelFrame(right_panel, text="On-Screen Wheel (Testing)", padding="10")
-        wheel_frame.grid(row=2, column=0, sticky=(W, E), pady=5)
+        wheel_frame = ttk.LabelFrame(wheel_mapping_container, text="On-Screen Wheel (Testing)", padding="10")
+        wheel_frame.grid(row=0, column=0, sticky=(W, E, N, S), padx=(0, 5))
         
         self.wheel_widget = WheelWidget(wheel_frame, self.controller_manager.virtual_controller, size=220)
         self.wheel_widget.grid(row=0, column=0, pady=5)
@@ -482,9 +507,77 @@ class ServoControlApp:
         ttk.Label(wheel_frame, text="Drag the wheel or use ← → arrow keys", 
                  font=("Arial", 9)).grid(row=1, column=0, pady=5)
         
+        # Sensitivity and auto-center controls
+        controls_frame = ttk.Frame(wheel_frame)
+        controls_frame.grid(row=2, column=0, pady=5)
+        
+        # Arrow key sensitivity
+        ttk.Label(controls_frame, text="Arrow Key Sensitivity:", font=("Arial", 9)).grid(row=0, column=0, sticky=W, padx=5)
+        self.sensitivity_var = DoubleVar(value=0.02)
+        sensitivity_scale = ttk.Scale(controls_frame, from_=0.001, to=0.1, variable=self.sensitivity_var, 
+                                      orient=HORIZONTAL, length=150, command=self.on_sensitivity_change)
+        sensitivity_scale.grid(row=0, column=1, padx=5)
+        self.sensitivity_label = ttk.Label(controls_frame, text="0.02", font=("Arial", 8))
+        self.sensitivity_label.grid(row=0, column=2, padx=5)
+        
+        # Auto-center speed
+        ttk.Label(controls_frame, text="Auto-Center Speed:", font=("Arial", 9)).grid(row=1, column=0, sticky=W, padx=5, pady=2)
+        self.autocenter_var = DoubleVar(value=0.95)
+        autocenter_scale = ttk.Scale(controls_frame, from_=0.0, to=1.0, variable=self.autocenter_var,
+                                    orient=HORIZONTAL, length=150, command=self.on_autocenter_change)
+        autocenter_scale.grid(row=1, column=1, padx=5, pady=2)
+        self.autocenter_label = ttk.Label(controls_frame, text="0.95", font=("Arial", 8))
+        self.autocenter_label.grid(row=1, column=2, padx=5, pady=2)
+        
+        # Servo mappings (to the right of wheel)
+        mapping_frame = ttk.LabelFrame(wheel_mapping_container, text="Servo Mappings", padding="5")
+        mapping_frame.grid(row=0, column=1, sticky=(W, E, N, S), padx=(5, 0))
+        
+        # Servo mapping list
+        columns = ("Servo", "Controller", "Input Type", "Input ID", "Value")
+        self.mapping_tree = ttk.Treeview(mapping_frame, columns=columns, show="headings", height=8)
+        for col in columns:
+            self.mapping_tree.heading(col, text=col)
+            self.mapping_tree.column(col, width=80)
+        
+        # Treeview container with scrollbar
+        tree_container = ttk.Frame(mapping_frame)
+        tree_container.grid(row=0, column=0, columnspan=2, sticky=(W, E, N, S), pady=2)
+        
+        self.mapping_tree.grid(row=0, column=0, sticky=(W, E, N, S))
+        
+        mapping_scroll = ttk.Scrollbar(tree_container, orient=VERTICAL, command=self.mapping_tree.yview)
+        mapping_scroll.grid(row=0, column=1, sticky=(N, S))
+        self.mapping_tree.configure(yscrollcommand=mapping_scroll.set)
+        
+        tree_container.columnconfigure(0, weight=1)
+        tree_container.rowconfigure(0, weight=1)
+        
+        # Add mapping controls
+        add_frame = ttk.Frame(mapping_frame)
+        add_frame.grid(row=1, column=0, columnspan=2, sticky=(W, E), pady=5)
+        
+        # First row of controls
+        ttk.Label(add_frame, text="Servo ID:").grid(row=0, column=0, padx=2, sticky=W)
+        self.servo_id_var = StringVar(value="0")
+        ttk.Spinbox(add_frame, from_=0, to=15, textvariable=self.servo_id_var, width=5).grid(row=0, column=1, padx=2, sticky=W)
+        
+        ttk.Label(add_frame, text="Type:").grid(row=0, column=2, padx=2, sticky=W)
+        self.input_type_var = StringVar(value="axis")
+        ttk.Combobox(add_frame, textvariable=self.input_type_var, values=["axis", "button", "hat"], 
+                    state="readonly", width=7).grid(row=0, column=3, padx=2, sticky=W)
+        
+        ttk.Label(add_frame, text="ID:").grid(row=0, column=4, padx=2, sticky=W)
+        self.input_id_var = StringVar(value="0")
+        ttk.Spinbox(add_frame, from_=0, to=15, textvariable=self.input_id_var, width=5).grid(row=0, column=5, padx=2, sticky=W)
+        
+        # Second row of buttons
+        ttk.Button(add_frame, text="Add Mapping", command=self.add_mapping).grid(row=1, column=0, columnspan=3, padx=2, pady=2, sticky=(W, E))
+        ttk.Button(add_frame, text="Remove", command=self.remove_mapping).grid(row=1, column=3, columnspan=3, padx=2, pady=2, sticky=(W, E))
+        
         # Wheel rotation display (for all controllers)
         angle_frame = ttk.LabelFrame(right_panel, text="Wheel Rotation Angle", padding="10")
-        angle_frame.grid(row=3, column=0, sticky=(W, E), pady=5)
+        angle_frame.grid(row=2, column=0, sticky=(W, E), pady=5)
         
         self.wheel_angle_var = StringVar(value="0°")
         wheel_label = ttk.Label(angle_frame, textvariable=self.wheel_angle_var, 
@@ -503,6 +596,7 @@ class ServoControlApp:
         right_panel.rowconfigure(1, weight=1)
         mapping_frame.columnconfigure(0, weight=1)
         mapping_frame.rowconfigure(0, weight=1)
+        wheel_frame.columnconfigure(0, weight=1)
         
         # Keyboard bindings for arrow keys
         self.root.bind('<Left>', lambda e: self.on_arrow_key('left', True))
@@ -514,6 +608,11 @@ class ServoControlApp:
         # Initialize
         self.refresh_controllers()
         self.refresh_ports()
+        
+        # Initialize sensitivity and auto-center settings
+        vc = self.controller_manager.virtual_controller
+        vc.set_arrow_key_sensitivity(self.sensitivity_var.get())
+        vc.set_auto_center_speed(self.autocenter_var.get())
         
     def refresh_controllers(self):
         """Refresh controller list"""
@@ -544,6 +643,18 @@ class ServoControlApp:
             vc.arrow_keys['left'] = pressed
         elif direction == 'right':
             vc.arrow_keys['right'] = pressed
+    
+    def on_sensitivity_change(self, value=None):
+        """Update arrow key sensitivity"""
+        sensitivity = self.sensitivity_var.get()
+        self.controller_manager.virtual_controller.set_arrow_key_sensitivity(sensitivity)
+        self.sensitivity_label.config(text=f"{sensitivity:.3f}")
+    
+    def on_autocenter_change(self, value=None):
+        """Update auto-center speed"""
+        speed = self.autocenter_var.get()
+        self.controller_manager.virtual_controller.set_auto_center_speed(speed)
+        self.autocenter_label.config(text=f"{speed:.2f}")
     
     def refresh_ports(self):
         """Refresh serial port list"""
@@ -728,19 +839,11 @@ class ServoControlApp:
             selection = self.controller_var.get()
             if selection and selection.startswith("V:"):
                 vc = self.controller_manager.virtual_controller
-                # Apply arrow key input continuously
-                if vc.arrow_keys['left'] and not vc.arrow_keys['right']:
-                    vc.set_wheel_angle(vc.wheel_angle - 0.02)
-                elif vc.arrow_keys['right'] and not vc.arrow_keys['left']:
-                    vc.set_wheel_angle(vc.wheel_angle + 0.02)
-                elif not vc.arrow_keys['left'] and not vc.arrow_keys['right']:
-                    # Return to center slowly (only if not dragging)
-                    if not self.wheel_widget.dragging and abs(vc.wheel_angle) > 0.01:
-                        vc.set_wheel_angle(vc.wheel_angle * 0.95)
+                # Apply arrow key input continuously with adjustable sensitivity
+                vc.update_arrow_keys(vc.arrow_keys['left'], vc.arrow_keys['right'])
                 
-                # Update wheel widget visual
-                angle_deg = vc.wheel_angle * 180
-                self.root.after(0, lambda: self.wheel_widget.set_angle(angle_deg))
+                # Update wheel widget visual (continuous rotation)
+                self.root.after(0, lambda: self.wheel_widget.set_angle(vc.wheel_angle))
             
             # Update stats
             self.update_stats()
@@ -813,9 +916,21 @@ class ServoControlApp:
             
             # Use first axis as steering wheel (typically axis 0)
             wheel_value = state['axes'][0]
-            # Convert from -1.0 to 1.0 range to degrees (-180 to 180)
-            angle = wheel_value * 180
-            self.wheel_angle_var.set(f"{angle:+.1f}°")
+            # For virtual controller, show actual continuous angle
+            if selection.startswith("V:"):
+                vc = self.controller_manager.virtual_controller
+                rotations = int(vc.wheel_angle / 360)
+                remainder = vc.wheel_angle % 360
+                if remainder > 180:
+                    remainder -= 360
+                if rotations != 0:
+                    self.wheel_angle_var.set(f"{remainder:+.1f}° ({rotations:+d} rot)")
+                else:
+                    self.wheel_angle_var.set(f"{remainder:+.1f}°")
+            else:
+                # Convert from -1.0 to 1.0 range to degrees (-180 to 180)
+                angle = wheel_value * 180
+                self.wheel_angle_var.set(f"{angle:+.1f}°")
         except:
             pass
     
