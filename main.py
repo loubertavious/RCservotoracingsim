@@ -18,6 +18,7 @@ class VirtualController:
         self.arrow_keys = {'left': False, 'right': False}
         self.arrow_key_sensitivity = 0.02  # Adjustable sensitivity
         self.auto_center_speed = 0.95  # Adjustable auto-center speed (0.0-1.0)
+        self.max_angle = 180.0  # Maximum angle limit in degrees (0 = unlimited)
         
     def get_info(self):
         return {
@@ -39,8 +40,13 @@ class VirtualController:
         }
     
     def set_wheel_angle(self, angle):
-        """Set wheel angle (continuous, no limits)"""
-        self.wheel_angle = angle  # Allow any angle value
+        """Set wheel angle (with max angle limit if set)"""
+        if self.max_angle > 0:
+            # Apply max angle limit (symmetric: -max_angle to +max_angle)
+            self.wheel_angle = max(-self.max_angle, min(self.max_angle, angle))
+        else:
+            # No limit (unlimited rotation)
+            self.wheel_angle = angle
     
     def set_arrow_key_sensitivity(self, sensitivity):
         """Set arrow key sensitivity (0.001 to 0.1)"""
@@ -49,6 +55,13 @@ class VirtualController:
     def set_auto_center_speed(self, speed):
         """Set auto-center speed (0.0 to 1.0, higher = faster return)"""
         self.auto_center_speed = max(0.0, min(1.0, speed))
+    
+    def set_max_angle(self, max_angle):
+        """Set maximum angle limit in degrees (0 = unlimited)"""
+        self.max_angle = max(0.0, max_angle)
+        # Apply limit to current angle if needed
+        if self.max_angle > 0:
+            self.set_wheel_angle(self.wheel_angle)
     
     def update_arrow_keys(self, left, right):
         """Update arrow key state"""
@@ -200,7 +213,7 @@ class WheelWidget(Canvas):
             elif diff < -180:
                 diff += 360
             # Add the difference to current angle (allows continuous rotation)
-            self.angle += diff
+            new_wheel_angle = self.angle + diff
         else:
             # First drag - align with current visual angle
             current_display = self.angle % 360
@@ -212,19 +225,21 @@ class WheelWidget(Canvas):
                 offset -= 360
             elif offset < -180:
                 offset += 360
-            self.angle = self.angle + offset
+            new_wheel_angle = self.angle + offset
         
         self.last_drag_angle = new_angle
         
-        # Update virtual controller (continuous angle)
-        self.virtual_controller.set_wheel_angle(self.angle)
+        # Update virtual controller (will apply max angle limit if set)
+        self.virtual_controller.set_wheel_angle(new_wheel_angle)
+        self.angle = self.virtual_controller.wheel_angle  # Get the limited angle back
         
         self.draw_wheel()
     
     def set_angle(self, angle):
-        """Set wheel angle programmatically (in degrees, continuous)"""
-        self.angle = angle  # No limits, allow continuous rotation
+        """Set wheel angle programmatically (in degrees, respects max angle limit)"""
+        # Use virtual controller's set_wheel_angle which applies max angle limit
         self.virtual_controller.set_wheel_angle(angle)
+        self.angle = self.virtual_controller.wheel_angle  # Get the limited angle back
         self.draw_wheel()
     
     def update(self):
@@ -418,6 +433,12 @@ class ServoControlApp:
         self.root.title("RC Servo Racing Sim Controller")
         self.root.geometry("1000x700")
         
+        # Bring window to front
+        self.root.lift()
+        self.root.attributes('-topmost', True)
+        self.root.after_idle(self.root.attributes, '-topmost', False)
+        self.root.focus_force()
+        
         self.controller_manager = ControllerManager()
         self.arduino_manager = ArduinoManager()
         
@@ -430,6 +451,20 @@ class ServoControlApp:
         
         self.setup_ui()
         self.start_polling()
+        
+        # Ensure window is visible and on top initially
+        self.bring_to_front()
+    
+    def bring_to_front(self):
+        """Bring the window to the front"""
+        try:
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.update()
+            self.root.attributes('-topmost', False)
+            self.root.focus_force()
+        except:
+            pass
         
     def setup_ui(self):
         # Main container
@@ -529,6 +564,15 @@ class ServoControlApp:
         self.autocenter_label = ttk.Label(controls_frame, text="0.95", font=("Arial", 8))
         self.autocenter_label.grid(row=1, column=2, padx=5, pady=2)
         
+        # Max angle limit
+        ttk.Label(controls_frame, text="Max Angle Limit:", font=("Arial", 9)).grid(row=2, column=0, sticky=W, padx=5, pady=2)
+        self.max_angle_var = DoubleVar(value=180.0)
+        max_angle_scale = ttk.Scale(controls_frame, from_=0.0, to=720.0, variable=self.max_angle_var,
+                                    orient=HORIZONTAL, length=150, command=self.on_max_angle_change)
+        max_angle_scale.grid(row=2, column=1, padx=5, pady=2)
+        self.max_angle_label = ttk.Label(controls_frame, text="180° (0=unlimited)", font=("Arial", 8))
+        self.max_angle_label.grid(row=2, column=2, padx=5, pady=2)
+        
         # Servo mappings (to the right of wheel)
         mapping_frame = ttk.LabelFrame(wheel_mapping_container, text="Servo Mappings", padding="5")
         mapping_frame.grid(row=0, column=1, sticky=(W, E, N, S), padx=(5, 0))
@@ -609,10 +653,11 @@ class ServoControlApp:
         self.refresh_controllers()
         self.refresh_ports()
         
-        # Initialize sensitivity and auto-center settings
+        # Initialize sensitivity, auto-center, and max angle settings
         vc = self.controller_manager.virtual_controller
         vc.set_arrow_key_sensitivity(self.sensitivity_var.get())
         vc.set_auto_center_speed(self.autocenter_var.get())
+        vc.set_max_angle(self.max_angle_var.get())
         
     def refresh_controllers(self):
         """Refresh controller list"""
@@ -655,6 +700,15 @@ class ServoControlApp:
         speed = self.autocenter_var.get()
         self.controller_manager.virtual_controller.set_auto_center_speed(speed)
         self.autocenter_label.config(text=f"{speed:.2f}")
+    
+    def on_max_angle_change(self, value=None):
+        """Update max angle limit"""
+        max_angle = self.max_angle_var.get()
+        self.controller_manager.virtual_controller.set_max_angle(max_angle)
+        if max_angle == 0:
+            self.max_angle_label.config(text="Unlimited")
+        else:
+            self.max_angle_label.config(text=f"{max_angle:.0f}°")
     
     def refresh_ports(self):
         """Refresh serial port list"""
@@ -747,6 +801,7 @@ class ServoControlApp:
             # Get selected controller
             selection = self.controller_var.get()
             if not selection:
+                print("No controller selected")
                 return
             
             # Handle virtual controller
@@ -762,9 +817,15 @@ class ServoControlApp:
                 'input_id': input_id
             }
             
-            self.update_mapping_display()
-        except ValueError:
-            pass
+            print(f"Added mapping: Servo {servo_id} -> {input_type} {input_id} from controller {controller_index}")
+            print(f"Total mappings: {len(self.mappings)}")
+            
+            # Force update on main thread
+            self.root.after(0, self.update_mapping_display)
+        except ValueError as e:
+            print(f"Error adding mapping: {e}")
+        except Exception as e:
+            print(f"Unexpected error adding mapping: {e}")
     
     def remove_mapping(self):
         """Remove selected servo mapping"""
@@ -778,26 +839,30 @@ class ServoControlApp:
     
     def update_mapping_display(self):
         """Update the mapping tree display"""
-        # Clear existing items
-        for item in self.mapping_tree.get_children():
-            self.mapping_tree.delete(item)
-        
-        # Add current mappings
-        for servo_id, mapping in self.mappings.items():
-            # Format controller name
-            if mapping['controller'] == -1:
-                controller_name = "Virtual Controller"
-            else:
-                controller_name = f"Controller {mapping['controller']}"
+        try:
+            # Clear existing items
+            for item in self.mapping_tree.get_children():
+                self.mapping_tree.delete(item)
             
-            input_type = mapping['input_type']
-            input_id = mapping['input_id']
-            
-            # Get current value
-            value = self.get_mapping_value(mapping)
-            value_str = f"{value:.2f}" if isinstance(value, float) else str(value)
-            
-            self.mapping_tree.insert("", END, values=(servo_id, controller_name, input_type, input_id, value_str))
+            # Add current mappings
+            for servo_id, mapping in sorted(self.mappings.items()):
+                # Format controller name
+                if mapping['controller'] == -1:
+                    controller_name = "Virtual Controller"
+                else:
+                    controller_name = f"Controller {mapping['controller']}"
+                
+                input_type = mapping['input_type']
+                input_id = mapping['input_id']
+                
+                # Get current value
+                value = self.get_mapping_value(mapping)
+                value_str = f"{value:.2f}" if isinstance(value, float) else str(value)
+                
+                # Insert into treeview
+                item_id = self.mapping_tree.insert("", END, values=(servo_id, controller_name, input_type, input_id, value_str))
+        except Exception as e:
+            print(f"Error updating mapping display: {e}")
     
     def get_mapping_value(self, mapping):
         """Get current value for a mapping"""
@@ -858,10 +923,34 @@ class ServoControlApp:
             if self.arduino_manager.connected:
                 responses = self.arduino_manager.read_responses()
             
-            # Update mapping display
-            self.root.after(0, self.update_mapping_display)
+            # Update mapping display values only (don't recreate items, just update values)
+            self.root.after(0, self.update_mapping_values)
             
             time.sleep(0.05)  # ~20Hz update rate
+    
+    def update_mapping_values(self):
+        """Update only the values in existing mapping tree items (for real-time updates)"""
+        try:
+            # Update values for existing items
+            for item_id in self.mapping_tree.get_children():
+                item_values = list(self.mapping_tree.item(item_id, 'values'))
+                if len(item_values) >= 4:
+                    servo_id = int(item_values[0])
+                    if servo_id in self.mappings:
+                        mapping = self.mappings[servo_id]
+                        # Get current value
+                        value = self.get_mapping_value(mapping)
+                        value_str = f"{value:.2f}" if isinstance(value, float) else str(value)
+                        # Update the value column (index 4)
+                        new_values = list(item_values)
+                        if len(new_values) >= 5:
+                            new_values[4] = value_str
+                        else:
+                            new_values.append(value_str)
+                        self.mapping_tree.item(item_id, values=tuple(new_values))
+        except Exception as e:
+            # If update fails, do a full refresh
+            self.update_mapping_display()
     
     def update_stats(self):
         """Update input statistics display"""
@@ -967,7 +1056,19 @@ class ServoControlApp:
 
 if __name__ == "__main__":
     root = Tk()
+    
+    # Bring window to front on startup
+    root.lift()
+    root.attributes('-topmost', True)
+    root.update()
+    root.attributes('-topmost', False)
+    root.focus_force()
+    
     app = ServoControlApp(root)
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
+    
+    # Ensure window stays on top initially
+    root.after(100, lambda: root.focus_force())
+    
     root.mainloop()
 
