@@ -43,7 +43,8 @@ void setup() {
   Serial.begin(9600);
   
   // Wait for serial connection (important for USB serial on UNO R3)
-  // Uncomment the next 3 lines if you want to wait for Serial Monitor
+  // Note: This will wait indefinitely if no Serial Monitor is open
+  // Uncomment if you want to wait for Serial Monitor
   // while (!Serial) {
   //   delay(10);
   // }
@@ -51,11 +52,19 @@ void setup() {
   // Give Arduino a moment to initialize
   delay(100);
   
-  Serial.println("RC Servo Controller Ready - Arduino UNO R3");
-  Serial.println("Command format: S<servo_id>:<angle>");
-  Serial.println("Example: S0:90");
-  Serial.print("Max servos: ");
-  Serial.println(MAX_SERVOS);
+  // Send startup message (Python app will look for this)
+  Serial.println("READY:RC Servo Controller - Arduino UNO R3");
+  Serial.println("READY:Command format: S<servo_id>:<angle>");
+  Serial.println("READY:Max servos: 12");
+  
+  // Blink onboard LED to show Arduino is running
+  pinMode(13, OUTPUT);
+  for(int i = 0; i < 3; i++) {
+    digitalWrite(13, HIGH);
+    delay(100);
+    digitalWrite(13, LOW);
+    delay(100);
+  }
 }
 
 void loop() {
@@ -82,11 +91,11 @@ void loop() {
           // Set servo angle
           servos[servoId].write(angle);
           
-          // Optional: echo back confirmation
-          // Serial.print("Servo ");
-          // Serial.print(servoId);
-          // Serial.print(" set to ");
-          // Serial.println(angle);
+          // Echo back confirmation (for debugging)
+          Serial.print("OK:S");
+          Serial.print(servoId);
+          Serial.print(":");
+          Serial.println(angle);
         }
       }
     }

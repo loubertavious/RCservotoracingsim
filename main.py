@@ -246,6 +246,9 @@ class ArduinoManager:
         self.connected = False
         self.port = None
         self.baudrate = 9600
+        self.last_response = ""
+        self.commands_sent = 0
+        self.commands_confirmed = 0
         
     def get_available_ports(self):
         """Get list of available serial ports"""
@@ -253,16 +256,49 @@ class ArduinoManager:
         return [port.device for port in ports]
     
     def connect(self, port, baudrate=9600):
-        """Connect to Arduino"""
+        """Connect to Arduino and verify it's responding"""
         try:
             if self.serial_connection:
                 self.disconnect()
-            self.serial_connection = serial.Serial(port, baudrate, timeout=1)
+            
+            print(f"Connecting to {port}...")
+            self.serial_connection = serial.Serial(port, baudrate, timeout=2)
             time.sleep(2)  # Wait for Arduino to reset
-            self.connected = True
-            self.port = port
-            self.baudrate = baudrate
-            return True
+            
+            # Clear any leftover data
+            self.serial_connection.reset_input_buffer()
+            
+            # Try to read Arduino's startup message
+            startup_messages = []
+            start_time = time.time()
+            while time.time() - start_time < 3:  # Wait up to 3 seconds
+                if self.serial_connection.in_waiting > 0:
+                    line = self.serial_connection.readline().decode('utf-8', errors='ignore').strip()
+                    if line:
+                        startup_messages.append(line)
+                        print(f"Arduino: {line}")
+                        if "READY" in line:
+                            break
+                time.sleep(0.1)
+            
+            # Check if we got a READY message
+            if any("READY" in msg for msg in startup_messages):
+                print("✓ Arduino is responding!")
+                self.connected = True
+                self.port = port
+                self.baudrate = baudrate
+                self.commands_sent = 0
+                self.commands_confirmed = 0
+                return True
+            else:
+                print("⚠ Warning: Arduino didn't send READY message, but connection opened")
+                print("  This might mean servos are drawing too much power")
+                print("  Try disconnecting servos and reconnecting")
+                self.connected = True  # Still mark as connected, but warn user
+                self.port = port
+                self.baudrate = baudrate
+                return True
+                
         except Exception as e:
             print(f"Connection error: {e}")
             self.connected = False
@@ -275,18 +311,52 @@ class ArduinoManager:
             self.serial_connection = None
         self.connected = False
     
+    def read_responses(self):
+        """Read any responses from Arduino (non-blocking)"""
+        responses = []
+        if self.connected and self.serial_connection:
+            try:
+                while self.serial_connection.in_waiting > 0:
+                    line = self.serial_connection.readline().decode('utf-8', errors='ignore').strip()
+                    if line:
+                        responses.append(line)
+                        if line.startswith("OK:"):
+                            self.commands_confirmed += 1
+            except:
+                pass
+        return responses
+    
     def send_servo_command(self, servo_id, angle):
         """Send servo command to Arduino (servo_id: 0-15, angle: 0-180)"""
         if self.connected and self.serial_connection:
             try:
                 # Format: "S<servo_id>:<angle>\n"
                 command = f"S{servo_id}:{angle}\n"
-                self.serial_connection.write(command.encode())
-                return True
+                bytes_written = self.serial_connection.write(command.encode())
+                self.commands_sent += 1
+                
+                # Try to read response (non-blocking)
+                responses = self.read_responses()
+                if responses:
+                    self.last_response = responses[-1]
+                
+                return bytes_written > 0
             except Exception as e:
                 print(f"Send error: {e}")
                 return False
         return False
+    
+    def get_status(self):
+        """Get connection status info"""
+        if not self.connected:
+            return "Disconnected"
+        
+        status = f"Connected: {self.port}"
+        if self.commands_sent > 0:
+            success_rate = (self.commands_confirmed / self.commands_sent) * 100
+            status += f" | Commands: {self.commands_sent} sent, {self.commands_confirmed} confirmed ({success_rate:.0f}%)"
+        
+        return status
 
 class ServoControlApp:
     def __init__(self, root):
@@ -361,6 +431,10 @@ class ServoControlApp:
         
         self.connection_status = ttk.Label(arduino_frame, text="Disconnected", foreground="red")
         self.connection_status.grid(row=1, column=0, columnspan=4, pady=2)
+        
+        # Debug/Status info
+        self.debug_status = ttk.Label(arduino_frame, text="", font=("Arial", 8), foreground="gray")
+        self.debug_status.grid(row=2, column=0, columnspan=4, pady=2)
         
         # Servo mappings
         mapping_frame = ttk.LabelFrame(right_panel, text="Servo Mappings", padding="5")
@@ -518,14 +592,39 @@ class ServoControlApp:
             self.arduino_manager.disconnect()
             self.connect_btn.config(text="Connect")
             self.connection_status.config(text="Disconnected", foreground="red")
+            self.debug_status.config(text="")
         else:
             port = self.port_var.get()
             if port:
                 if self.arduino_manager.connect(port):
                     self.connect_btn.config(text="Disconnect")
                     self.connection_status.config(text=f"Connected: {port}", foreground="green")
+                    # Start reading responses in background
+                    self.update_arduino_status()
                 else:
                     self.connection_status.config(text="Connection Failed", foreground="red")
+                    self.debug_status.config(text="Check if Arduino is powered and servos aren't drawing too much current")
+    
+    def update_arduino_status(self):
+        """Update Arduino status display"""
+        if self.arduino_manager.connected:
+            # Read any responses
+            responses = self.arduino_manager.read_responses()
+            if responses:
+                # Update debug status with last response
+                last_response = responses[-1]
+                if last_response.startswith("OK:"):
+                    self.debug_status.config(text=f"✓ Last command confirmed: {last_response}", foreground="green")
+                else:
+                    self.debug_status.config(text=f"Arduino: {last_response}", foreground="blue")
+            
+            # Update status with command stats
+            status_text = self.arduino_manager.get_status()
+            if "Commands:" in status_text:
+                self.debug_status.config(text=status_text.split("|")[1].strip() if "|" in status_text else "")
+            
+            # Schedule next update
+            self.root.after(100, self.update_arduino_status)
     
     def add_mapping(self):
         """Add a new servo mapping"""
@@ -651,6 +750,10 @@ class ServoControlApp:
             
             # Process mappings and send to Arduino
             self.process_mappings()
+            
+            # Read Arduino responses (non-blocking)
+            if self.arduino_manager.connected:
+                responses = self.arduino_manager.read_responses()
             
             # Update mapping display
             self.root.after(0, self.update_mapping_display)
