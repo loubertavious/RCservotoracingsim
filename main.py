@@ -21,9 +21,6 @@ class VirtualController:
         self.auto_center_speed = 0.95  # Adjustable auto-center speed (0.0-1.0)
         self.max_angle = 180.0  # Maximum angle limit in degrees (0 = unlimited)
         self.max_throttle_angle = 180.0  # Maximum throttle angle limit in degrees (0 = unlimited)
-        # Axis gain and speed adjustments (one per axis)
-        self.axis_gain = [1.0, 1.0, 1.0, 1.0]  # Gain multiplier for each axis (0.0 to 2.0)
-        self.axis_speed = [1.0, 1.0, 1.0, 1.0]  # Speed multiplier for each axis (0.0 to 2.0)
         
     def get_info(self):
         return {
@@ -37,37 +34,17 @@ class VirtualController:
         # Map continuous angle to -1.0 to 1.0 for axis output
         # Use modulo to get current rotation within one full turn
         normalized = math.sin(math.radians(self.wheel_angle))
-        raw_axis_0 = normalized
-        
+        self.axes[0] = normalized
         # Throttle works like steering - continuous angle tracking
         throttle_normalized = math.sin(math.radians(self.throttle_angle))
-        raw_axis_1 = throttle_normalized
+        self.axes[1] = throttle_normalized
         # Brake is the inverse of throttle (like steering rotation mapping)
-        raw_axis_2 = -throttle_normalized
-        
-        # Apply gain and speed adjustments to each axis
-        self.axes[0] = max(-1.0, min(1.0, raw_axis_0 * self.axis_gain[0] * self.axis_speed[0]))
-        self.axes[1] = max(-1.0, min(1.0, raw_axis_1 * self.axis_gain[1] * self.axis_speed[1]))
-        self.axes[2] = max(-1.0, min(1.0, raw_axis_2 * self.axis_gain[2] * self.axis_speed[2]))
-        # Axis 3 (clutch) if needed
-        if len(self.axes) > 3:
-            self.axes[3] = max(-1.0, min(1.0, self.axes[3] * self.axis_gain[3] * self.axis_speed[3]))
-        
+        self.axes[2] = -throttle_normalized
         return {
             'axes': self.axes.copy(),
             'buttons': self.buttons.copy(),
             'hats': self.hats.copy()
         }
-    
-    def set_axis_gain(self, axis_id, gain):
-        """Set gain for a specific axis (0-3)"""
-        if 0 <= axis_id < len(self.axis_gain):
-            self.axis_gain[axis_id] = max(0.0, min(2.0, gain))
-    
-    def set_axis_speed(self, axis_id, speed):
-        """Set speed for a specific axis (0-3)"""
-        if 0 <= axis_id < len(self.axis_speed):
-            self.axis_speed[axis_id] = max(0.0, min(2.0, speed))
     
     def set_wheel_angle(self, angle):
         """Set wheel angle (with max angle limit if set)"""
@@ -560,78 +537,59 @@ class ServoControlApp:
         stats_label = ttk.Label(left_panel, text="Input Statistics:", font=("Arial", 10, "bold"))
         stats_label.grid(row=2, column=0, columnspan=3, sticky=W, pady=(10, 5))
         
-        self.stats_text = Text(left_panel, height=8, width=50, wrap=WORD)
-        self.stats_text.grid(row=3, column=0, columnspan=3, sticky=(W, E), pady=5)
+        self.stats_text = Text(left_panel, height=15, width=50, wrap=WORD)
+        self.stats_text.grid(row=3, column=0, columnspan=3, sticky=(W, E, N, S), pady=5)
         
         # Scrollbar for stats
         stats_scroll = ttk.Scrollbar(left_panel, orient=VERTICAL, command=self.stats_text.yview)
         stats_scroll.grid(row=3, column=3, sticky=(N, S))
         self.stats_text.configure(yscrollcommand=stats_scroll.set)
         
-        # Visual axis sliders and controls
-        axis_controls_frame = ttk.LabelFrame(left_panel, text="Axis Controls (Gain & Speed)", padding="10")
-        axis_controls_frame.grid(row=4, column=0, columnspan=4, sticky=(W, E, N, S), pady=5)
+        # Visual axis bar charts
+        axis_charts_label = ttk.Label(left_panel, text="Axis Visual Display:", font=("Arial", 10, "bold"))
+        axis_charts_label.grid(row=4, column=0, columnspan=4, sticky=W, pady=(10, 5))
         
-        # Store axis slider widgets and controls
-        self.axis_sliders = []
-        self.axis_gain_vars = []
-        self.axis_speed_vars = []
-        self.axis_gain_labels = []
-        self.axis_speed_labels = []
+        axis_charts_frame = ttk.LabelFrame(left_panel, text="Real-Time Axis Values", padding="5")
+        axis_charts_frame.grid(row=5, column=0, columnspan=4, sticky=(W, E), pady=5)
         
-        axis_names = ["Steering (Axis 0)", "Throttle (Axis 1)", "Brake (Axis 2)", "Clutch (Axis 3)"]
-        for i, axis_name in enumerate(axis_names):
-            # Axis frame
-            axis_frame = ttk.Frame(axis_controls_frame)
-            axis_frame.grid(row=i, column=0, sticky=(W, E), pady=2)
+        # Axis colors and names
+        axis_info = [
+            ("Steering (Axis 0)", "#4A90E2", "#2E5C8A"),  # Blue gradient
+            ("Throttle (Axis 1)", "#50C878", "#2E7D4E"),  # Green gradient
+            ("Brake (Axis 2)", "#E74C3C", "#8B2635"),      # Red gradient
+            ("Clutch (Axis 3)", "#FF8C00", "#CC7000")     # Orange gradient
+        ]
+        
+        self.axis_charts = []
+        for i, (name, color1, color2) in enumerate(axis_info):
+            # Create frame for each axis
+            axis_frame = ttk.Frame(axis_charts_frame)
+            axis_frame.grid(row=i, column=0, sticky=(W, E), pady=3)
             
-            # Axis name label
-            ttk.Label(axis_frame, text=axis_name, font=("Arial", 9, "bold"), width=18).grid(row=0, column=0, sticky=W, padx=2)
+            # Axis label
+            label = ttk.Label(axis_frame, text=name, font=("Arial", 9), width=20)
+            label.grid(row=0, column=0, sticky=W, padx=5)
             
-            # Visual slider showing current value
-            slider_frame = ttk.Frame(axis_frame)
-            slider_frame.grid(row=0, column=1, sticky=(W, E), padx=5)
-            
-            slider_var = DoubleVar(value=0.0)
-            axis_slider = ttk.Scale(slider_frame, from_=-1.0, to=1.0, variable=slider_var,
-                                   orient=HORIZONTAL, length=150, state="readonly")
-            axis_slider.grid(row=0, column=0, sticky=(W, E))
-            self.axis_sliders.append((slider_var, axis_slider))
+            # Canvas for gradient bar chart
+            chart_canvas = Canvas(axis_frame, height=30, width=250, bg="#2b2b2b", highlightthickness=1, highlightbackground="#555555")
+            chart_canvas.grid(row=0, column=1, sticky=(W, E), padx=5)
             
             # Value label
-            value_label = ttk.Label(slider_frame, text="0.00", font=("Arial", 8), width=6)
-            value_label.grid(row=0, column=1, padx=2)
-            self.axis_sliders[-1] = (slider_var, axis_slider, value_label)
+            value_label = ttk.Label(axis_frame, text="0.00", font=("Arial", 9), width=10)
+            value_label.grid(row=0, column=2, padx=5)
             
-            # Gain control
-            gain_frame = ttk.Frame(axis_frame)
-            gain_frame.grid(row=1, column=0, columnspan=2, sticky=(W, E), pady=2)
-            
-            ttk.Label(gain_frame, text="Gain:", font=("Arial", 8), width=8).grid(row=0, column=0, sticky=W, padx=2)
-            gain_var = DoubleVar(value=1.0)
-            gain_scale = ttk.Scale(gain_frame, from_=0.0, to=2.0, variable=gain_var,
-                                   orient=HORIZONTAL, length=100, command=lambda v, idx=i: self.on_axis_gain_change(idx, v))
-            gain_scale.grid(row=0, column=1, sticky=(W, E), padx=2)
-            gain_label = ttk.Label(gain_frame, text="1.00", font=("Arial", 8), width=5)
-            gain_label.grid(row=0, column=2, padx=2)
-            self.axis_gain_vars.append(gain_var)
-            self.axis_gain_labels.append(gain_label)
-            
-            # Speed control
-            ttk.Label(gain_frame, text="Speed:", font=("Arial", 8), width=8).grid(row=0, column=3, sticky=W, padx=2)
-            speed_var = DoubleVar(value=1.0)
-            speed_scale = ttk.Scale(gain_frame, from_=0.0, to=2.0, variable=speed_var,
-                                   orient=HORIZONTAL, length=100, command=lambda v, idx=i: self.on_axis_speed_change(idx, v))
-            speed_scale.grid(row=0, column=4, sticky=(W, E), padx=2)
-            speed_label = ttk.Label(gain_frame, text="1.00", font=("Arial", 8), width=5)
-            speed_label.grid(row=0, column=5, padx=2)
-            self.axis_speed_vars.append(speed_var)
-            self.axis_speed_labels.append(speed_label)
+            # Store canvas, colors, and label for updates
+            self.axis_charts.append({
+                'canvas': chart_canvas,
+                'color1': color1,
+                'color2': color2,
+                'value_label': value_label,
+                'name': name
+            })
             
             axis_frame.columnconfigure(1, weight=1)
-            slider_frame.columnconfigure(0, weight=1)
-            gain_frame.columnconfigure(1, weight=1)
-            gain_frame.columnconfigure(4, weight=1)
+        
+        axis_charts_frame.columnconfigure(0, weight=1)
         
         # Right panel - Tabbed interface
         right_panel = ttk.LabelFrame(main_frame, text="Controller & Servo Control", padding="10")
@@ -642,54 +600,11 @@ class ServoControlApp:
         notebook.grid(row=0, column=0, sticky=(W, E, N, S), pady=5)
         
         # Tab 1: Controller & Wheel
-        controller_tab = ttk.Frame(notebook)
+        controller_tab = ttk.Frame(notebook, padding="10")
         notebook.add(controller_tab, text="Controller & Wheel")
         
-        # Create scrollable canvas
-        self.controller_canvas = Canvas(controller_tab, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(controller_tab, orient="vertical", command=self.controller_canvas.yview)
-        self.controller_scrollable_frame = ttk.Frame(self.controller_canvas, padding="10")
-        
-        def update_scroll_region(event=None):
-            self.controller_canvas.update_idletasks()
-            self.controller_canvas.configure(scrollregion=self.controller_canvas.bbox("all"))
-        
-        self.controller_scrollable_frame.bind("<Configure>", update_scroll_region)
-        
-        canvas_window = self.controller_canvas.create_window((0, 0), window=self.controller_scrollable_frame, anchor="nw")
-        
-        def configure_canvas_width(event):
-            canvas_width = event.width
-            self.controller_canvas.itemconfig(canvas_window, width=canvas_width)
-        self.controller_canvas.bind('<Configure>', configure_canvas_width)
-        
-        self.controller_canvas.configure(yscrollcommand=scrollbar.set)
-        
-        self.controller_canvas.grid(row=0, column=0, sticky=(N, S, W, E))
-        scrollbar.grid(row=0, column=1, sticky=(N, S))
-        
-        # Bind mousewheel to canvas (works on Windows and Linux)
-        def _on_mousewheel(event):
-            # Windows and Mac
-            if hasattr(event, 'delta'):
-                self.controller_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            # Linux
-            elif event.num == 4:
-                self.controller_canvas.yview_scroll(-1, "units")
-            elif event.num == 5:
-                self.controller_canvas.yview_scroll(1, "units")
-        
-        # Bind to canvas and scrollable frame
-        def bind_mousewheel(widget):
-            widget.bind("<MouseWheel>", _on_mousewheel)
-            widget.bind("<Button-4>", _on_mousewheel)
-            widget.bind("<Button-5>", _on_mousewheel)
-        
-        bind_mousewheel(self.controller_canvas)
-        bind_mousewheel(self.controller_scrollable_frame)
-        
         # Arduino connection (at top of controller tab)
-        arduino_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="Arduino Connection", padding="5")
+        arduino_frame = ttk.LabelFrame(controller_tab, text="Arduino Connection", padding="5")
         arduino_frame.grid(row=0, column=0, sticky=(W, E), pady=5)
         
         ttk.Label(arduino_frame, text="Port:").grid(row=0, column=0, sticky=W, pady=2)
@@ -709,7 +624,7 @@ class ServoControlApp:
         self.debug_status.grid(row=2, column=0, columnspan=4, pady=2)
         
         # Interactive wheel widget (shown when virtual controller is selected)
-        wheel_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="On-Screen Wheel (Testing)", padding="10")
+        wheel_frame = ttk.LabelFrame(controller_tab, text="On-Screen Wheel (Testing)", padding="10")
         wheel_frame.grid(row=1, column=0, sticky=(W, E), pady=5)
         
         self.wheel_widget = WheelWidget(wheel_frame, self.controller_manager.virtual_controller, size=220)
@@ -719,24 +634,24 @@ class ServoControlApp:
                  font=("Arial", 9)).grid(row=1, column=0, pady=5)
         
         # Sensitivity and auto-center controls
-        controls_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="Wheel Settings", padding="10")
-        controls_frame.grid(row=2, column=0, sticky=(W, E), pady=5)
+        controls_frame = ttk.Frame(wheel_frame)
+        controls_frame.grid(row=2, column=0, pady=5)
         
         # Arrow key sensitivity
-        ttk.Label(controls_frame, text="Arrow Key Sensitivity:", font=("Arial", 9)).grid(row=0, column=0, sticky=W, padx=5, pady=2)
+        ttk.Label(controls_frame, text="Arrow Key Sensitivity:", font=("Arial", 9)).grid(row=0, column=0, sticky=W, padx=5)
         self.sensitivity_var = DoubleVar(value=0.02)
         sensitivity_scale = ttk.Scale(controls_frame, from_=0.001, to=0.1, variable=self.sensitivity_var, 
-                                      orient=HORIZONTAL, length=200, command=self.on_sensitivity_change)
-        sensitivity_scale.grid(row=0, column=1, padx=5, pady=2, sticky=(W, E))
+                                      orient=HORIZONTAL, length=150, command=self.on_sensitivity_change)
+        sensitivity_scale.grid(row=0, column=1, padx=5)
         self.sensitivity_label = ttk.Label(controls_frame, text="0.02", font=("Arial", 8))
-        self.sensitivity_label.grid(row=0, column=2, padx=5, pady=2)
+        self.sensitivity_label.grid(row=0, column=2, padx=5)
         
         # Auto-center speed
         ttk.Label(controls_frame, text="Auto-Center Speed:", font=("Arial", 9)).grid(row=1, column=0, sticky=W, padx=5, pady=2)
         self.autocenter_var = DoubleVar(value=0.95)
         autocenter_scale = ttk.Scale(controls_frame, from_=0.0, to=1.0, variable=self.autocenter_var,
-                                    orient=HORIZONTAL, length=200, command=self.on_autocenter_change)
-        autocenter_scale.grid(row=1, column=1, padx=5, pady=2, sticky=(W, E))
+                                    orient=HORIZONTAL, length=150, command=self.on_autocenter_change)
+        autocenter_scale.grid(row=1, column=1, padx=5, pady=2)
         self.autocenter_label = ttk.Label(controls_frame, text="0.95", font=("Arial", 8))
         self.autocenter_label.grid(row=1, column=2, padx=5, pady=2)
         
@@ -744,31 +659,14 @@ class ServoControlApp:
         ttk.Label(controls_frame, text="Max Angle Limit:", font=("Arial", 9)).grid(row=2, column=0, sticky=W, padx=5, pady=2)
         self.max_angle_var = DoubleVar(value=180.0)
         max_angle_scale = ttk.Scale(controls_frame, from_=0.0, to=720.0, variable=self.max_angle_var,
-                                    orient=HORIZONTAL, length=200, command=self.on_max_angle_change)
-        max_angle_scale.grid(row=2, column=1, padx=5, pady=2, sticky=(W, E))
+                                    orient=HORIZONTAL, length=150, command=self.on_max_angle_change)
+        max_angle_scale.grid(row=2, column=1, padx=5, pady=2)
         self.max_angle_label = ttk.Label(controls_frame, text="180° (0=unlimited)", font=("Arial", 8))
         self.max_angle_label.grid(row=2, column=2, padx=5, pady=2)
         
-        # Throttle controls section (works like steering)
-        throttle_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="Throttle Controls (↑ Up, ↓ Down - Brake is Inverse)", padding="10")
-        throttle_frame.grid(row=3, column=0, sticky=(W, E), pady=5)
-        
-        # Max throttle angle limit (works like steering max angle)
-        ttk.Label(throttle_frame, text="Max Throttle Angle Limit:", font=("Arial", 9)).grid(row=0, column=0, sticky=W, padx=5, pady=2)
-        self.max_throttle_angle_var = DoubleVar(value=180.0)
-        max_throttle_angle_scale = ttk.Scale(throttle_frame, from_=0.0, to=720.0, variable=self.max_throttle_angle_var,
-                                             orient=HORIZONTAL, length=200, command=self.on_max_throttle_angle_change)
-        max_throttle_angle_scale.grid(row=0, column=1, padx=5, pady=2, sticky=(W, E))
-        self.max_throttle_angle_label = ttk.Label(throttle_frame, text="180° (0=unlimited)", font=("Arial", 8))
-        self.max_throttle_angle_label.grid(row=0, column=2, padx=5, pady=2)
-        
-        throttle_frame.columnconfigure(1, weight=1)
-        
-        controls_frame.columnconfigure(1, weight=1)
-        
         # Wheel rotation display (for all controllers)
-        angle_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="Wheel Rotation Angle", padding="10")
-        angle_frame.grid(row=4, column=0, sticky=(W, E), pady=5)
+        angle_frame = ttk.LabelFrame(controller_tab, text="Wheel Rotation Angle", padding="10")
+        angle_frame.grid(row=2, column=0, sticky=(W, E), pady=5)
         
         self.wheel_angle_var = StringVar(value="0°")
         wheel_label = ttk.Label(angle_frame, textvariable=self.wheel_angle_var, 
@@ -779,13 +677,13 @@ class ServoControlApp:
         mapping_tab = ttk.Frame(notebook, padding="10")
         notebook.add(mapping_tab, text="Servo Mappings")
         
-        # Servo mapping list
-        mapping_frame = ttk.LabelFrame(mapping_tab, text="Servo Mappings", padding="5")
-        mapping_frame.grid(row=0, column=0, sticky=(W, E, N, S), pady=5)
+        # Servo mapping list - use a simple frame instead of LabelFrame to avoid blocking
+        mapping_list_label = ttk.Label(mapping_tab, text="Servo Mappings", font=("Arial", 10, "bold"))
+        mapping_list_label.grid(row=0, column=0, sticky=W, pady=(0, 5))
         
         # Treeview container with scrollbar
-        tree_container = ttk.Frame(mapping_frame)
-        tree_container.grid(row=0, column=0, sticky=(W, E, N, S), pady=2)
+        tree_container = ttk.Frame(mapping_tab)
+        tree_container.grid(row=1, column=0, sticky=(W, E, N, S), pady=2)
         
         columns = ("Servo", "Controller", "Input Type", "Input ID", "Value")
         self.mapping_tree = ttk.Treeview(tree_container, columns=columns, show="headings", height=15)
@@ -808,8 +706,8 @@ class ServoControlApp:
         tree_container.rowconfigure(0, weight=1)
         
         # Add mapping controls
-        add_frame = ttk.Frame(mapping_frame)
-        add_frame.grid(row=1, column=0, sticky=(W, E), pady=5)
+        add_frame = ttk.LabelFrame(mapping_tab, text="Add/Remove Mappings", padding="5")
+        add_frame.grid(row=2, column=0, sticky=(W, E), pady=5)
         
         # First row of controls
         ttk.Label(add_frame, text="Servo ID:").grid(row=0, column=0, padx=2, sticky=W)
@@ -837,17 +735,12 @@ class ServoControlApp:
         main_frame.rowconfigure(0, weight=1)
         left_panel.columnconfigure(1, weight=1)
         left_panel.rowconfigure(3, weight=1)
-        left_panel.rowconfigure(4, weight=1)
-        axis_controls_frame.columnconfigure(0, weight=1)
+        axis_charts_frame.columnconfigure(0, weight=1)
         right_panel.columnconfigure(0, weight=1)
         right_panel.rowconfigure(0, weight=1)
         controller_tab.columnconfigure(0, weight=1)
-        controller_tab.rowconfigure(0, weight=1)
-        self.controller_scrollable_frame.columnconfigure(0, weight=1)
         mapping_tab.columnconfigure(0, weight=1)
-        mapping_tab.rowconfigure(0, weight=1)
-        mapping_frame.columnconfigure(0, weight=1)
-        mapping_frame.rowconfigure(0, weight=1)
+        mapping_tab.rowconfigure(1, weight=1)
         wheel_frame.columnconfigure(0, weight=1)
         arduino_frame.columnconfigure(1, weight=1)
         
@@ -871,18 +764,7 @@ class ServoControlApp:
         vc.set_arrow_key_sensitivity(self.sensitivity_var.get())
         vc.set_auto_center_speed(self.autocenter_var.get())
         vc.set_max_angle(self.max_angle_var.get())
-        vc.set_max_throttle_angle(self.max_throttle_angle_var.get())
-        
-        # Initialize axis gain and speed
-        for i in range(4):
-            vc.set_axis_gain(i, self.axis_gain_vars[i].get())
-            vc.set_axis_speed(i, self.axis_speed_vars[i].get())
-        
-        # Initialize mapping display
-        self.update_mapping_display()
-        
-        # Update scroll region after initial setup
-        self.root.after(100, lambda: self.controller_canvas.configure(scrollregion=self.controller_canvas.bbox("all")))
+        vc.set_max_throttle_angle(180.0)  # Default throttle angle limit
         
     def refresh_controllers(self):
         """Refresh controller list"""
@@ -938,27 +820,6 @@ class ServoControlApp:
             self.max_angle_label.config(text="Unlimited")
         else:
             self.max_angle_label.config(text=f"{max_angle:.0f}°")
-    
-    def on_max_throttle_angle_change(self, value=None):
-        """Update max throttle angle limit"""
-        max_angle = self.max_throttle_angle_var.get()
-        self.controller_manager.virtual_controller.set_max_throttle_angle(max_angle)
-        if max_angle == 0:
-            self.max_throttle_angle_label.config(text="Unlimited")
-        else:
-            self.max_throttle_angle_label.config(text=f"{max_angle:.0f}°")
-    
-    def on_axis_gain_change(self, axis_id, value=None):
-        """Update axis gain"""
-        gain = self.axis_gain_vars[axis_id].get()
-        self.controller_manager.virtual_controller.set_axis_gain(axis_id, gain)
-        self.axis_gain_labels[axis_id].config(text=f"{gain:.2f}")
-    
-    def on_axis_speed_change(self, axis_id, value=None):
-        """Update axis speed"""
-        speed = self.axis_speed_vars[axis_id].get()
-        self.controller_manager.virtual_controller.set_axis_speed(axis_id, speed)
-        self.axis_speed_labels[axis_id].config(text=f"{speed:.2f}")
     
     def refresh_ports(self):
         """Refresh serial port list"""
@@ -1161,8 +1022,11 @@ class ServoControlApp:
                 # Update wheel widget visual (continuous rotation)
                 self.root.after(0, lambda: self.wheel_widget.set_angle(vc.wheel_angle))
             
-            # Update stats (throttled to reduce flashing)
+            # Update stats
             self.update_stats()
+            
+            # Update visual axis charts
+            self.root.after(0, self.update_axis_charts)
             
             # Update wheel angle (assuming axis 0 is steering wheel)
             self.update_wheel_angle()
@@ -1203,34 +1067,8 @@ class ServoControlApp:
             # If update fails, do a full refresh
             self.update_mapping_display()
     
-    def update_axis_sliders(self):
-        """Update visual axis sliders with current values"""
-        try:
-            selection = self.controller_var.get()
-            if not selection:
-                return
-            
-            # Handle virtual controller
-            if selection.startswith("V:"):
-                index = -1
-            else:
-                index = int(selection.split(':')[0])
-            
-            state = self.controller_manager.get_controller_state(index)
-            if not state or not state['axes']:
-                return
-            
-            # Update each axis slider
-            for i, (slider_var, slider_widget, value_label) in enumerate(self.axis_sliders):
-                if i < len(state['axes']):
-                    value = state['axes'][i]
-                    slider_var.set(value)
-                    value_label.config(text=f"{value:+.2f}")
-        except Exception as e:
-            pass
-    
     def update_stats(self):
-        """Update input statistics display - optimized for racing wheels"""
+        """Update input statistics display"""
         selection = self.controller_var.get()
         if not selection:
             return
@@ -1287,6 +1125,117 @@ class ServoControlApp:
                 self.stats_text.delete(1.0, END)
                 self.stats_text.insert(1.0, text)
                 self.last_stats_text = text
+        except Exception as e:
+            # Silently fail to prevent error spam
+            pass
+    
+    def update_axis_charts(self):
+        """Update visual gradient bar chart sliders for each axis"""
+        try:
+            selection = self.controller_var.get()
+            if not selection:
+                return
+            
+            # Handle virtual controller
+            if selection.startswith("V:"):
+                index = -1
+            else:
+                index = int(selection.split(':')[0])
+            
+            state = self.controller_manager.get_controller_state(index)
+            if not state or not state['axes']:
+                return
+            
+            # Update each axis chart
+            for i, chart in enumerate(self.axis_charts):
+                if i < len(state['axes']):
+                    value = state['axes'][i]
+                    canvas = chart['canvas']
+                    color1 = chart['color1']
+                    color2 = chart['color2']
+                    value_label = chart['value_label']
+                    
+                    # Clear canvas
+                    canvas.delete("all")
+                    
+                    # Get canvas dimensions
+                    canvas.update_idletasks()
+                    width = canvas.winfo_width()
+                    height = canvas.winfo_height()
+                    if width < 10:
+                        width = 250  # Default width
+                    if height < 10:
+                        height = 30  # Default height
+                    
+                    # Draw background track
+                    margin = 3
+                    track_y = height // 2
+                    track_height = height - margin * 2
+                    canvas.create_rectangle(margin, margin, width - margin, height - margin, 
+                                          fill="#1a1a1a", outline="#555555", width=1)
+                    
+                    # Calculate bar position (-1.0 to 1.0 maps to left to right)
+                    center_x = width / 2
+                    bar_max_width = (width / 2) - margin * 2
+                    bar_width = abs(value) * bar_max_width
+                    
+                    if abs(value) > 0.001:  # Only draw if significant
+                        if value >= 0:
+                            # Positive value - gradient bar extends right from center
+                            bar_x1 = center_x
+                            bar_x2 = center_x + bar_width
+                            
+                            # Create gradient effect (lighter to darker from center to edge)
+                            steps = max(10, int(bar_width))
+                            for step in range(steps):
+                                x1 = bar_x1 + (step / steps) * bar_width
+                                x2 = bar_x1 + ((step + 1) / steps) * bar_width
+                                
+                                # Interpolate color from color1 (lighter) to color2 (darker)
+                                ratio = step / steps
+                                r1, g1, b1 = tuple(int(color1[j:j+2], 16) for j in (1, 3, 5))
+                                r2, g2, b2 = tuple(int(color2[j:j+2], 16) for j in (1, 3, 5))
+                                r = int(r1 + (r2 - r1) * ratio)
+                                g = int(g1 + (g2 - g1) * ratio)
+                                b = int(b1 + (b2 - b1) * ratio)
+                                color = f"#{r:02x}{g:02x}{b:02x}"
+                                
+                                canvas.create_rectangle(x1, margin, x2, height - margin,
+                                                      fill=color, outline=color, width=0)
+                        else:
+                            # Negative value - gradient bar extends left from center
+                            bar_x1 = center_x - bar_width
+                            bar_x2 = center_x
+                            
+                            # Create gradient effect (lighter to darker from center to edge)
+                            steps = max(10, int(bar_width))
+                            for step in range(steps):
+                                x1 = bar_x2 - ((step + 1) / steps) * bar_width
+                                x2 = bar_x2 - (step / steps) * bar_width
+                                
+                                # Interpolate color from color1 (lighter) to color2 (darker)
+                                ratio = step / steps
+                                r1, g1, b1 = tuple(int(color1[j:j+2], 16) for j in (1, 3, 5))
+                                r2, g2, b2 = tuple(int(color2[j:j+2], 16) for j in (1, 3, 5))
+                                r = int(r1 + (r2 - r1) * ratio)
+                                g = int(g1 + (g2 - g1) * ratio)
+                                b = int(b1 + (b2 - b1) * ratio)
+                                color = f"#{r:02x}{g:02x}{b:02x}"
+                                
+                                canvas.create_rectangle(x1, margin, x2, height - margin,
+                                                      fill=color, outline=color, width=0)
+                    
+                    # Draw center line
+                    canvas.create_line(center_x, margin, center_x, height - margin,
+                                     fill="#666666", width=2)
+                    
+                    # Update value label
+                    if i == 0:  # Steering - show degrees
+                        angle = value * 180
+                        value_label.config(text=f"{angle:+6.1f}°")
+                    else:  # Others - show percentage
+                        percent = (value + 1.0) * 50
+                        value_label.config(text=f"{percent:5.1f}%")
         except Exception as e:
             # Silently fail to prevent error spam
             pass
