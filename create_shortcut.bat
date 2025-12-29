@@ -25,3 +25,4 @@ if exist "%USERPROFILE%\Desktop\%SHORTCUT_NAME%" (
 
 pause
 
+

@@ -44,3 +44,4 @@ py main.py
 - Run `run.bat` to see error messages
 - Make sure dependencies are installed: `pip install -r requirements.txt`
 
+

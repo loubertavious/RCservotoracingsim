@@ -15,10 +15,15 @@ class VirtualController:
         self.buttons = [False] * 16
         self.hats = [(0, 0)]
         self.wheel_angle = 0.0  # Continuous rotation, no limits
-        self.arrow_keys = {'left': False, 'right': False}
+        self.arrow_keys = {'left': False, 'right': False, 'up': False, 'down': False}
         self.arrow_key_sensitivity = 0.02  # Adjustable sensitivity
+        self.pedal_sensitivity = 0.02  # Adjustable pedal sensitivity
         self.auto_center_speed = 0.95  # Adjustable auto-center speed (0.0-1.0)
+        self.pedal_return_speed = 0.95  # Adjustable pedal return speed (0.0-1.0)
         self.max_angle = 180.0  # Maximum angle limit in degrees (0 = unlimited)
+        self.max_throttle = 1.0  # Maximum throttle value (0.0 to 1.0, 1.0 = full range)
+        self.throttle_value = -1.0  # Throttle axis value (-1.0 to 1.0, -1 = released, 1 = full throttle)
+        # Brake is automatically the inverse of throttle (like steering rotation)
         
     def get_info(self):
         return {
@@ -33,6 +38,10 @@ class VirtualController:
         # Use modulo to get current rotation within one full turn
         normalized = math.sin(math.radians(self.wheel_angle))
         self.axes[0] = normalized
+        # Set throttle axis
+        self.axes[1] = self.throttle_value
+        # Brake is the inverse of throttle (like steering rotation mapping)
+        self.axes[2] = -self.throttle_value
         return {
             'axes': self.axes.copy(),
             'buttons': self.buttons.copy(),
@@ -52,6 +61,21 @@ class VirtualController:
         """Set arrow key sensitivity (0.001 to 0.1)"""
         self.arrow_key_sensitivity = max(0.001, min(0.1, sensitivity))
     
+    def set_pedal_sensitivity(self, sensitivity):
+        """Set pedal sensitivity (0.001 to 0.1)"""
+        self.pedal_sensitivity = max(0.001, min(0.1, sensitivity))
+    
+    def set_pedal_return_speed(self, speed):
+        """Set pedal return speed (0.0 to 1.0, higher = faster return)"""
+        self.pedal_return_speed = max(0.0, min(1.0, speed))
+    
+    def set_max_throttle(self, max_throttle):
+        """Set maximum throttle limit (0.0 to 1.0, 1.0 = full range)"""
+        self.max_throttle = max(0.0, min(1.0, max_throttle))
+        # Apply limit to current throttle if needed
+        if self.throttle_value > -1.0 + (2.0 * self.max_throttle):
+            self.throttle_value = -1.0 + (2.0 * self.max_throttle)
+    
     def set_auto_center_speed(self, speed):
         """Set auto-center speed (0.0 to 1.0, higher = faster return)"""
         self.auto_center_speed = max(0.0, min(1.0, speed))
@@ -63,10 +87,13 @@ class VirtualController:
         if self.max_angle > 0:
             self.set_wheel_angle(self.wheel_angle)
     
-    def update_arrow_keys(self, left, right):
-        """Update arrow key state"""
+    def update_arrow_keys(self, left, right, up, down):
+        """Update arrow key state for wheel and pedals"""
         self.arrow_keys['left'] = left
         self.arrow_keys['right'] = right
+        self.arrow_keys['up'] = up
+        self.arrow_keys['down'] = down
+        
         # Apply arrow key input to wheel with adjustable sensitivity
         if left and not right:
             self.set_wheel_angle(self.wheel_angle - self.arrow_key_sensitivity * 180)
@@ -81,6 +108,26 @@ class VirtualController:
                 self.set_wheel_angle(self.wheel_angle + diff * (1.0 - self.auto_center_speed))
             else:
                 self.wheel_angle = 0.0
+        
+        # Apply arrow key input to throttle (up arrow) with max throttle limit
+        # Down arrow decreases throttle (which increases brake since brake = -throttle)
+        throttle_max = -1.0 + (2.0 * self.max_throttle)  # Convert max_throttle (0-1) to axis range (-1 to 1)
+        if up:
+            # Increase throttle (decreases brake automatically)
+            new_throttle = min(throttle_max, self.throttle_value + self.pedal_sensitivity)
+            self.throttle_value = max(-1.0, new_throttle)
+        elif down:
+            # Decrease throttle (increases brake automatically, like steering rotation)
+            new_throttle = max(-1.0, self.throttle_value - self.pedal_sensitivity)
+            self.throttle_value = min(throttle_max, new_throttle)
+        else:
+            # Return throttle to -1.0 (released/center) with adjustable speed
+            if self.throttle_value > -1.0:
+                self.throttle_value = max(-1.0, self.throttle_value - (1.0 - self.pedal_return_speed) * 0.1)
+            elif self.throttle_value < -1.0:
+                self.throttle_value = min(-1.0, self.throttle_value + (1.0 - self.pedal_return_speed) * 0.1)
+            else:
+                self.throttle_value = -1.0
 
 class WheelWidget(Canvas):
     """Interactive wheel widget that can be dragged"""
@@ -449,6 +496,9 @@ class ServoControlApp:
         self.running = False
         self.poll_thread = None
         
+        # Cache for stats to prevent unnecessary updates
+        self.last_stats_text = ""
+        
         self.setup_ui()
         self.start_polling()
         
@@ -501,12 +551,63 @@ class ServoControlApp:
         stats_scroll.grid(row=3, column=3, sticky=(N, S))
         self.stats_text.configure(yscrollcommand=stats_scroll.set)
         
-        # Right panel - Servo mapping
-        right_panel = ttk.LabelFrame(main_frame, text="Servo Mapping", padding="10")
+        # Right panel - Tabbed interface
+        right_panel = ttk.LabelFrame(main_frame, text="Controller & Servo Control", padding="10")
         right_panel.grid(row=0, column=1, sticky=(W, E, N, S))
         
-        # Arduino connection
-        arduino_frame = ttk.LabelFrame(right_panel, text="Arduino Connection", padding="5")
+        # Create notebook for tabs
+        notebook = ttk.Notebook(right_panel)
+        notebook.grid(row=0, column=0, sticky=(W, E, N, S), pady=5)
+        
+        # Tab 1: Controller & Wheel
+        controller_tab = ttk.Frame(notebook)
+        notebook.add(controller_tab, text="Controller & Wheel")
+        
+        # Create scrollable canvas
+        self.controller_canvas = Canvas(controller_tab, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(controller_tab, orient="vertical", command=self.controller_canvas.yview)
+        self.controller_scrollable_frame = ttk.Frame(self.controller_canvas, padding="10")
+        
+        def update_scroll_region(event=None):
+            self.controller_canvas.update_idletasks()
+            self.controller_canvas.configure(scrollregion=self.controller_canvas.bbox("all"))
+        
+        self.controller_scrollable_frame.bind("<Configure>", update_scroll_region)
+        
+        canvas_window = self.controller_canvas.create_window((0, 0), window=self.controller_scrollable_frame, anchor="nw")
+        
+        def configure_canvas_width(event):
+            canvas_width = event.width
+            self.controller_canvas.itemconfig(canvas_window, width=canvas_width)
+        self.controller_canvas.bind('<Configure>', configure_canvas_width)
+        
+        self.controller_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        self.controller_canvas.grid(row=0, column=0, sticky=(N, S, W, E))
+        scrollbar.grid(row=0, column=1, sticky=(N, S))
+        
+        # Bind mousewheel to canvas (works on Windows and Linux)
+        def _on_mousewheel(event):
+            # Windows and Mac
+            if hasattr(event, 'delta'):
+                self.controller_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            # Linux
+            elif event.num == 4:
+                self.controller_canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                self.controller_canvas.yview_scroll(1, "units")
+        
+        # Bind to canvas and scrollable frame
+        def bind_mousewheel(widget):
+            widget.bind("<MouseWheel>", _on_mousewheel)
+            widget.bind("<Button-4>", _on_mousewheel)
+            widget.bind("<Button-5>", _on_mousewheel)
+        
+        bind_mousewheel(self.controller_canvas)
+        bind_mousewheel(self.controller_scrollable_frame)
+        
+        # Arduino connection (at top of controller tab)
+        arduino_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="Arduino Connection", padding="5")
         arduino_frame.grid(row=0, column=0, sticky=(W, E), pady=5)
         
         ttk.Label(arduino_frame, text="Port:").grid(row=0, column=0, sticky=W, pady=2)
@@ -525,16 +626,9 @@ class ServoControlApp:
         self.debug_status = ttk.Label(arduino_frame, text="", font=("Arial", 8), foreground="gray")
         self.debug_status.grid(row=2, column=0, columnspan=4, pady=2)
         
-        # Container for wheel and mappings side by side
-        wheel_mapping_container = ttk.Frame(right_panel)
-        wheel_mapping_container.grid(row=1, column=0, sticky=(W, E, N, S), pady=5)
-        wheel_mapping_container.columnconfigure(0, weight=1)
-        wheel_mapping_container.columnconfigure(1, weight=1)
-        wheel_mapping_container.rowconfigure(0, weight=1)
-        
         # Interactive wheel widget (shown when virtual controller is selected)
-        wheel_frame = ttk.LabelFrame(wheel_mapping_container, text="On-Screen Wheel (Testing)", padding="10")
-        wheel_frame.grid(row=0, column=0, sticky=(W, E, N, S), padx=(0, 5))
+        wheel_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="On-Screen Wheel (Testing)", padding="10")
+        wheel_frame.grid(row=1, column=0, sticky=(W, E), pady=5)
         
         self.wheel_widget = WheelWidget(wheel_frame, self.controller_manager.virtual_controller, size=220)
         self.wheel_widget.grid(row=0, column=0, pady=5)
@@ -543,24 +637,24 @@ class ServoControlApp:
                  font=("Arial", 9)).grid(row=1, column=0, pady=5)
         
         # Sensitivity and auto-center controls
-        controls_frame = ttk.Frame(wheel_frame)
-        controls_frame.grid(row=2, column=0, pady=5)
+        controls_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="Wheel Settings", padding="10")
+        controls_frame.grid(row=2, column=0, sticky=(W, E), pady=5)
         
         # Arrow key sensitivity
-        ttk.Label(controls_frame, text="Arrow Key Sensitivity:", font=("Arial", 9)).grid(row=0, column=0, sticky=W, padx=5)
+        ttk.Label(controls_frame, text="Arrow Key Sensitivity:", font=("Arial", 9)).grid(row=0, column=0, sticky=W, padx=5, pady=2)
         self.sensitivity_var = DoubleVar(value=0.02)
         sensitivity_scale = ttk.Scale(controls_frame, from_=0.001, to=0.1, variable=self.sensitivity_var, 
-                                      orient=HORIZONTAL, length=150, command=self.on_sensitivity_change)
-        sensitivity_scale.grid(row=0, column=1, padx=5)
+                                      orient=HORIZONTAL, length=200, command=self.on_sensitivity_change)
+        sensitivity_scale.grid(row=0, column=1, padx=5, pady=2, sticky=(W, E))
         self.sensitivity_label = ttk.Label(controls_frame, text="0.02", font=("Arial", 8))
-        self.sensitivity_label.grid(row=0, column=2, padx=5)
+        self.sensitivity_label.grid(row=0, column=2, padx=5, pady=2)
         
         # Auto-center speed
         ttk.Label(controls_frame, text="Auto-Center Speed:", font=("Arial", 9)).grid(row=1, column=0, sticky=W, padx=5, pady=2)
         self.autocenter_var = DoubleVar(value=0.95)
         autocenter_scale = ttk.Scale(controls_frame, from_=0.0, to=1.0, variable=self.autocenter_var,
-                                    orient=HORIZONTAL, length=150, command=self.on_autocenter_change)
-        autocenter_scale.grid(row=1, column=1, padx=5, pady=2)
+                                    orient=HORIZONTAL, length=200, command=self.on_autocenter_change)
+        autocenter_scale.grid(row=1, column=1, padx=5, pady=2, sticky=(W, E))
         self.autocenter_label = ttk.Label(controls_frame, text="0.95", font=("Arial", 8))
         self.autocenter_label.grid(row=1, column=2, padx=5, pady=2)
         
@@ -568,25 +662,76 @@ class ServoControlApp:
         ttk.Label(controls_frame, text="Max Angle Limit:", font=("Arial", 9)).grid(row=2, column=0, sticky=W, padx=5, pady=2)
         self.max_angle_var = DoubleVar(value=180.0)
         max_angle_scale = ttk.Scale(controls_frame, from_=0.0, to=720.0, variable=self.max_angle_var,
-                                    orient=HORIZONTAL, length=150, command=self.on_max_angle_change)
-        max_angle_scale.grid(row=2, column=1, padx=5, pady=2)
+                                    orient=HORIZONTAL, length=200, command=self.on_max_angle_change)
+        max_angle_scale.grid(row=2, column=1, padx=5, pady=2, sticky=(W, E))
         self.max_angle_label = ttk.Label(controls_frame, text="180° (0=unlimited)", font=("Arial", 8))
         self.max_angle_label.grid(row=2, column=2, padx=5, pady=2)
         
-        # Servo mappings (to the right of wheel)
-        mapping_frame = ttk.LabelFrame(wheel_mapping_container, text="Servo Mappings", padding="5")
-        mapping_frame.grid(row=0, column=1, sticky=(W, E, N, S), padx=(5, 0))
+        # Pedal controls section
+        pedal_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="Pedal Controls (↑ Throttle, ↓ Brake - Inverse Mapping)", padding="10")
+        pedal_frame.grid(row=3, column=0, sticky=(W, E), pady=5)
+        
+        # Pedal sensitivity
+        ttk.Label(pedal_frame, text="Pedal Sensitivity:", font=("Arial", 9)).grid(row=0, column=0, sticky=W, padx=5, pady=2)
+        self.pedal_sensitivity_var = DoubleVar(value=0.02)
+        pedal_sensitivity_scale = ttk.Scale(pedal_frame, from_=0.001, to=0.1, variable=self.pedal_sensitivity_var,
+                                           orient=HORIZONTAL, length=200, command=self.on_pedal_sensitivity_change)
+        pedal_sensitivity_scale.grid(row=0, column=1, padx=5, pady=2, sticky=(W, E))
+        self.pedal_sensitivity_label = ttk.Label(pedal_frame, text="0.02", font=("Arial", 8))
+        self.pedal_sensitivity_label.grid(row=0, column=2, padx=5, pady=2)
+        
+        # Pedal return speed
+        ttk.Label(pedal_frame, text="Pedal Return Speed:", font=("Arial", 9)).grid(row=1, column=0, sticky=W, padx=5, pady=2)
+        self.pedal_return_var = DoubleVar(value=0.95)
+        pedal_return_scale = ttk.Scale(pedal_frame, from_=0.0, to=1.0, variable=self.pedal_return_var,
+                                       orient=HORIZONTAL, length=200, command=self.on_pedal_return_change)
+        pedal_return_scale.grid(row=1, column=1, padx=5, pady=2, sticky=(W, E))
+        self.pedal_return_label = ttk.Label(pedal_frame, text="0.95", font=("Arial", 8))
+        self.pedal_return_label.grid(row=1, column=2, padx=5, pady=2)
+        
+        # Max throttle limit (brake automatically mirrors this)
+        ttk.Label(pedal_frame, text="Max Pedal Limit:", font=("Arial", 9)).grid(row=2, column=0, sticky=W, padx=5, pady=2)
+        self.max_throttle_var = DoubleVar(value=1.0)
+        max_throttle_scale = ttk.Scale(pedal_frame, from_=0.0, to=1.0, variable=self.max_throttle_var,
+                                       orient=HORIZONTAL, length=200, command=self.on_max_throttle_change)
+        max_throttle_scale.grid(row=2, column=1, padx=5, pady=2, sticky=(W, E))
+        self.max_throttle_label = ttk.Label(pedal_frame, text="100% (full range)", font=("Arial", 8))
+        self.max_throttle_label.grid(row=2, column=2, padx=5, pady=2)
+        
+        controls_frame.columnconfigure(1, weight=1)
+        pedal_frame.columnconfigure(1, weight=1)
+        
+        # Wheel rotation display (for all controllers)
+        angle_frame = ttk.LabelFrame(self.controller_scrollable_frame, text="Wheel Rotation Angle", padding="10")
+        angle_frame.grid(row=4, column=0, sticky=(W, E), pady=5)
+        
+        self.wheel_angle_var = StringVar(value="0°")
+        wheel_label = ttk.Label(angle_frame, textvariable=self.wheel_angle_var, 
+                               font=("Arial", 24, "bold"))
+        wheel_label.grid(row=0, column=0, pady=10)
+        
+        # Tab 2: Servo Mappings
+        mapping_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(mapping_tab, text="Servo Mappings")
         
         # Servo mapping list
-        columns = ("Servo", "Controller", "Input Type", "Input ID", "Value")
-        self.mapping_tree = ttk.Treeview(mapping_frame, columns=columns, show="headings", height=8)
-        for col in columns:
-            self.mapping_tree.heading(col, text=col)
-            self.mapping_tree.column(col, width=80)
+        mapping_frame = ttk.LabelFrame(mapping_tab, text="Servo Mappings", padding="5")
+        mapping_frame.grid(row=0, column=0, sticky=(W, E, N, S), pady=5)
         
         # Treeview container with scrollbar
         tree_container = ttk.Frame(mapping_frame)
-        tree_container.grid(row=0, column=0, columnspan=2, sticky=(W, E, N, S), pady=2)
+        tree_container.grid(row=0, column=0, sticky=(W, E, N, S), pady=2)
+        
+        columns = ("Servo", "Controller", "Input Type", "Input ID", "Value")
+        self.mapping_tree = ttk.Treeview(tree_container, columns=columns, show="headings", height=15)
+        for col in columns:
+            self.mapping_tree.heading(col, text=col)
+            if col == "Controller":
+                self.mapping_tree.column(col, width=150)
+            elif col == "Value":
+                self.mapping_tree.column(col, width=80)
+            else:
+                self.mapping_tree.column(col, width=100)
         
         self.mapping_tree.grid(row=0, column=0, sticky=(W, E, N, S))
         
@@ -599,7 +744,7 @@ class ServoControlApp:
         
         # Add mapping controls
         add_frame = ttk.Frame(mapping_frame)
-        add_frame.grid(row=1, column=0, columnspan=2, sticky=(W, E), pady=5)
+        add_frame.grid(row=1, column=0, sticky=(W, E), pady=5)
         
         # First row of controls
         ttk.Label(add_frame, text="Servo ID:").grid(row=0, column=0, padx=2, sticky=W)
@@ -619,15 +764,6 @@ class ServoControlApp:
         ttk.Button(add_frame, text="Add Mapping", command=self.add_mapping).grid(row=1, column=0, columnspan=3, padx=2, pady=2, sticky=(W, E))
         ttk.Button(add_frame, text="Remove", command=self.remove_mapping).grid(row=1, column=3, columnspan=3, padx=2, pady=2, sticky=(W, E))
         
-        # Wheel rotation display (for all controllers)
-        angle_frame = ttk.LabelFrame(right_panel, text="Wheel Rotation Angle", padding="10")
-        angle_frame.grid(row=2, column=0, sticky=(W, E), pady=5)
-        
-        self.wheel_angle_var = StringVar(value="0°")
-        wheel_label = ttk.Label(angle_frame, textvariable=self.wheel_angle_var, 
-                               font=("Arial", 24, "bold"))
-        wheel_label.grid(row=0, column=0, pady=10)
-        
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
@@ -637,16 +773,26 @@ class ServoControlApp:
         left_panel.columnconfigure(1, weight=1)
         left_panel.rowconfigure(3, weight=1)
         right_panel.columnconfigure(0, weight=1)
-        right_panel.rowconfigure(1, weight=1)
+        right_panel.rowconfigure(0, weight=1)
+        controller_tab.columnconfigure(0, weight=1)
+        controller_tab.rowconfigure(0, weight=1)
+        self.controller_scrollable_frame.columnconfigure(0, weight=1)
+        mapping_tab.columnconfigure(0, weight=1)
+        mapping_tab.rowconfigure(0, weight=1)
         mapping_frame.columnconfigure(0, weight=1)
         mapping_frame.rowconfigure(0, weight=1)
         wheel_frame.columnconfigure(0, weight=1)
+        arduino_frame.columnconfigure(1, weight=1)
         
         # Keyboard bindings for arrow keys
         self.root.bind('<Left>', lambda e: self.on_arrow_key('left', True))
         self.root.bind('<KeyRelease-Left>', lambda e: self.on_arrow_key('left', False))
         self.root.bind('<Right>', lambda e: self.on_arrow_key('right', True))
         self.root.bind('<KeyRelease-Right>', lambda e: self.on_arrow_key('right', False))
+        self.root.bind('<Up>', lambda e: self.on_arrow_key('up', True))
+        self.root.bind('<KeyRelease-Up>', lambda e: self.on_arrow_key('up', False))
+        self.root.bind('<Down>', lambda e: self.on_arrow_key('down', True))
+        self.root.bind('<KeyRelease-Down>', lambda e: self.on_arrow_key('down', False))
         self.root.focus_set()  # Allow keyboard focus
         
         # Initialize
@@ -658,6 +804,15 @@ class ServoControlApp:
         vc.set_arrow_key_sensitivity(self.sensitivity_var.get())
         vc.set_auto_center_speed(self.autocenter_var.get())
         vc.set_max_angle(self.max_angle_var.get())
+        vc.set_pedal_sensitivity(self.pedal_sensitivity_var.get())
+        vc.set_pedal_return_speed(self.pedal_return_var.get())
+        vc.set_max_throttle(self.max_throttle_var.get())
+        
+        # Initialize mapping display
+        self.update_mapping_display()
+        
+        # Update scroll region after initial setup
+        self.root.after(100, lambda: self.controller_canvas.configure(scrollregion=self.controller_canvas.bbox("all")))
         
     def refresh_controllers(self):
         """Refresh controller list"""
@@ -688,6 +843,10 @@ class ServoControlApp:
             vc.arrow_keys['left'] = pressed
         elif direction == 'right':
             vc.arrow_keys['right'] = pressed
+        elif direction == 'up':
+            vc.arrow_keys['up'] = pressed
+        elif direction == 'down':
+            vc.arrow_keys['down'] = pressed
     
     def on_sensitivity_change(self, value=None):
         """Update arrow key sensitivity"""
@@ -709,6 +868,25 @@ class ServoControlApp:
             self.max_angle_label.config(text="Unlimited")
         else:
             self.max_angle_label.config(text=f"{max_angle:.0f}°")
+    
+    def on_pedal_sensitivity_change(self, value=None):
+        """Update pedal sensitivity"""
+        sensitivity = self.pedal_sensitivity_var.get()
+        self.controller_manager.virtual_controller.set_pedal_sensitivity(sensitivity)
+        self.pedal_sensitivity_label.config(text=f"{sensitivity:.3f}")
+    
+    def on_pedal_return_change(self, value=None):
+        """Update pedal return speed"""
+        speed = self.pedal_return_var.get()
+        self.controller_manager.virtual_controller.set_pedal_return_speed(speed)
+        self.pedal_return_label.config(text=f"{speed:.2f}")
+    
+    def on_max_throttle_change(self, value=None):
+        """Update max throttle/brake limit (brake mirrors throttle)"""
+        max_throttle = self.max_throttle_var.get()
+        self.controller_manager.virtual_controller.set_max_throttle(max_throttle)
+        percent = max_throttle * 100
+        self.max_throttle_label.config(text=f"{percent:.0f}% (full range)" if max_throttle == 1.0 else f"{percent:.0f}%")
     
     def refresh_ports(self):
         """Refresh serial port list"""
@@ -905,12 +1083,13 @@ class ServoControlApp:
             if selection and selection.startswith("V:"):
                 vc = self.controller_manager.virtual_controller
                 # Apply arrow key input continuously with adjustable sensitivity
-                vc.update_arrow_keys(vc.arrow_keys['left'], vc.arrow_keys['right'])
+                vc.update_arrow_keys(vc.arrow_keys['left'], vc.arrow_keys['right'], 
+                                    vc.arrow_keys['up'], vc.arrow_keys['down'])
                 
                 # Update wheel widget visual (continuous rotation)
                 self.root.after(0, lambda: self.wheel_widget.set_angle(vc.wheel_angle))
             
-            # Update stats
+            # Update stats (throttled to reduce flashing)
             self.update_stats()
             
             # Update wheel angle (assuming axis 0 is steering wheel)
@@ -953,7 +1132,7 @@ class ServoControlApp:
             self.update_mapping_display()
     
     def update_stats(self):
-        """Update input statistics display"""
+        """Update input statistics display - optimized for racing wheels"""
         selection = self.controller_var.get()
         if not selection:
             return
@@ -969,21 +1148,46 @@ class ServoControlApp:
             if not state:
                 return
             
-            text = "AXES:\n"
-            for i, value in enumerate(state['axes']):
-                text += f"  Axis {i}: {value:6.3f}\n"
+            # Build text efficiently
+            text = "RACING WHEEL INPUTS:\n"
+            text += "=" * 30 + "\n\n"
             
-            text += "\nBUTTONS:\n"
-            for i, pressed in enumerate(state['buttons']):
-                text += f"  Button {i}: {'PRESSED' if pressed else 'released'}\n"
+            # Common racing wheel axes (only show first 4, which are typically steering, throttle, brake, clutch)
+            axis_names = ["Steering", "Throttle", "Brake", "Clutch"]
+            for i, value in enumerate(state['axes'][:4]):  # Only show first 4 axes
+                # Always show axis 0 (steering), others only if significant
+                if abs(value) > 0.001 or i == 0:
+                    axis_name = axis_names[i] if i < len(axis_names) else f"Axis {i}"
+                    # Convert steering to degrees for better readability
+                    if i == 0:
+                        angle = value * 180
+                        text += f"{axis_name:12s}: {value:7.3f} ({angle:+7.1f}°)\n"
+                    else:
+                        # Show throttle/brake/clutch as percentage
+                        percent = (value + 1.0) * 50  # Convert -1 to 1 range to 0-100%
+                        text += f"{axis_name:12s}: {value:7.3f} ({percent:5.1f}%)\n"
             
-            text += "\nHATS:\n"
-            for i, hat in enumerate(state['hats']):
-                text += f"  Hat {i}: ({hat[0]}, {hat[1]})\n"
+            # Only show active buttons (pressed buttons)
+            active_buttons = [i for i, pressed in enumerate(state['buttons']) if pressed]
+            if active_buttons:
+                text += "\nACTIVE BUTTONS:\n"
+                for i in active_buttons:
+                    text += f"  Button {i}\n"
             
-            self.stats_text.delete(1.0, END)
-            self.stats_text.insert(1.0, text)
-        except:
+            # Only show active hats (non-zero hats)
+            active_hats = [(i, hat) for i, hat in enumerate(state['hats']) if hat[0] != 0 or hat[1] != 0]
+            if active_hats:
+                text += "\nACTIVE HATS:\n"
+                for i, hat in active_hats:
+                    text += f"  Hat {i}: ({hat[0]:+2d}, {hat[1]:+2d})\n"
+            
+            # Only update if text actually changed (prevents flashing)
+            if text != self.last_stats_text:
+                self.stats_text.delete(1.0, END)
+                self.stats_text.insert(1.0, text)
+                self.last_stats_text = text
+        except Exception as e:
+            # Silently fail to prevent error spam
             pass
     
     def update_wheel_angle(self):

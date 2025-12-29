@@ -3,3 +3,4 @@ WshShell.CurrentDirectory = CreateObject("Scripting.FileSystemObject").GetParent
 WshShell.Run "py main.py", 0, False
 Set WshShell = Nothing
 
+
