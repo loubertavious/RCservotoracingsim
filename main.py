@@ -355,7 +355,7 @@ class ArduinoManager:
         self.serial_connection = None
         self.connected = False
         self.port = None
-        self.baudrate = 9600
+        self.baudrate = 9600  # Default for Arduino Uno, will auto-detect ESP32-S3 (115200)
         self.last_response = ""
         self.commands_sent = 0
         self.commands_confirmed = 0
@@ -365,15 +365,45 @@ class ArduinoManager:
         ports = serial.tools.list_ports.comports()
         return [port.device for port in ports]
     
+    def auto_detect_baudrate(self, port):
+        """Auto-detect baud rate by trying common values"""
+        common_baudrates = [115200, 9600, 57600, 38400, 19200]
+        
+        for baud in common_baudrates:
+            try:
+                test_serial = serial.Serial(port, baud, timeout=1)
+                time.sleep(0.5)  # Wait for device to send startup message
+                
+                # Check for READY message
+                start_time = time.time()
+                while time.time() - start_time < 2:
+                    if test_serial.in_waiting > 0:
+                        line = test_serial.readline().decode('utf-8', errors='ignore').strip()
+                        if "READY" in line:
+                            test_serial.close()
+                            return baud
+                test_serial.close()
+            except:
+                continue
+        
+        return None  # Could not detect, use default
+    
     def connect(self, port, baudrate=9600):
-        """Connect to Arduino and verify it's responding"""
+        """Connect to Arduino/ESP32-S3 and verify it's responding"""
         try:
             if self.serial_connection:
                 self.disconnect()
             
             print(f"Connecting to {port}...")
+            
+            # Try to auto-detect baud rate (ESP32-S3 uses 115200, Arduino Uno uses 9600)
+            detected_baudrate = self.auto_detect_baudrate(port)
+            if detected_baudrate:
+                baudrate = detected_baudrate
+                print(f"Auto-detected baud rate: {baudrate}")
+            
             self.serial_connection = serial.Serial(port, baudrate, timeout=2)
-            time.sleep(2)  # Wait for Arduino to reset
+            time.sleep(2)  # Wait for device to reset
             
             # Clear any leftover data
             self.serial_connection.reset_input_buffer()

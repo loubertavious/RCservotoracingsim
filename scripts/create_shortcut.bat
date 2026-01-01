@@ -3,8 +3,9 @@ echo Creating desktop shortcut...
 echo.
 
 set SCRIPT_DIR=%~dp0
+set PROJECT_ROOT=%SCRIPT_DIR%..
 set SHORTCUT_NAME=RC Servo Controller.lnk
-set TARGET_PATH=%SCRIPT_DIR%launch_app.vbs
+set TARGET_PATH=%PROJECT_ROOT%\LAUNCH.bat
 set ICON_PATH=%SystemRoot%\System32\shell32.dll,137
 
 powershell -Command "$WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('%USERPROFILE%\Desktop\%SHORTCUT_NAME%'); $Shortcut.TargetPath = '%TARGET_PATH%'; $Shortcut.WorkingDirectory = '%SCRIPT_DIR%'; $Shortcut.IconLocation = '%ICON_PATH%'; $Shortcut.Description = 'RC Servo Racing Sim Controller'; $Shortcut.Save()"

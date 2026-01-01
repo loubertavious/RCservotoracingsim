@@ -20,16 +20,20 @@ A Python application that allows you to control servos on an Arduino using racin
 
 ## Installation
 
-1. **Install Python dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Quick Setup (Recommended)
+
+1. **Run SETUP.bat:**
+   - Double-click `SETUP.bat` to automatically:
+     * Check Python installation
+     * Install required dependencies
+     * Create desktop shortcuts
 
 2. **Upload Arduino firmware:**
-   - Open `arduino_servo_control.ino` in Arduino IDE
+   - Open `arduino/arduino_servo_control.ino` in Arduino IDE
    - Connect your Arduino via USB
    - Select the correct board and port in Arduino IDE
    - Upload the sketch to your Arduino
+   - See `arduino/ARDUINO_SETUP.md` for detailed instructions
 
 3. **Wire your servos:**
    - Connect servo signal wires to pins 2-13 and A0-A3 (or modify `servoPins` array in the Arduino sketch)
@@ -37,12 +41,38 @@ A Python application that allows you to control servos on an Arduino using racin
    - Connect servo ground (GND) to Arduino GND
    - **Note**: If using multiple servos, use an external power supply for the servos to avoid overloading the Arduino's 5V regulator
 
+### Manual Installation
+
+1. **Install Python dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Follow steps 2-3 above for Arduino setup**
+
+## Distribution & Packaging
+
+To package this program for distribution to other PCs:
+
+1. **Create distribution package:**
+   - Run `CREATE_PACKAGE.bat` to create a ZIP file with all necessary files
+   - The ZIP will include launchers, documentation, and setup scripts
+
+2. **Distribute the package:**
+   - Share the ZIP file with users
+   - Users should extract it and run `SETUP.bat` once
+   - After setup, they can use `LAUNCH.bat` or the desktop shortcut
+
+3. **For more details:**
+   - See `docs/PACKAGING.md` for advanced packaging options
+   - See `docs/DISTRIBUTION_README.txt` for user instructions
+
 ## Usage
 
 1. **Run the application:**
-   ```bash
-   python main.py
-   ```
+   - **Easiest:** Double-click "RC Servo Controller" on your Desktop (created by SETUP.bat)
+   - **Alternative:** Double-click `LAUNCH.bat` in the program folder
+   - **Command line:** `python main.py` or `py main.py`
 
 2. **Connect your controller:**
    - Plug in your racing wheel or game controller
@@ -99,7 +129,7 @@ A Python application that allows you to control servos on an Arduino using racin
 
 ### Changing Servo Pins
 
-Edit the `servoPins` array in `arduino_servo_control.ino`:
+Edit the `servoPins` array in `arduino/arduino_servo_control.ino`:
 ```cpp
 int servoPins[MAX_SERVOS] = {
   2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, A0, A1, A2, A3

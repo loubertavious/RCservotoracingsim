@@ -7,6 +7,11 @@ echo   RC Servo Racing Sim Controller
 echo ========================================
 echo.
 
+REM Get the parent directory (project root)
+set SCRIPT_DIR=%~dp0
+set PROJECT_ROOT=%SCRIPT_DIR%..
+cd /d "%PROJECT_ROOT%"
+
 REM Try py launcher first (Windows), then python
 set PYTHON_CMD=py
 py --version >nul 2>&1
