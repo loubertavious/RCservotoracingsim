@@ -1,4 +1,11 @@
-pygame>=2.5.0
+# Core dependencies (required)
 pyserial>=3.5
-pyfirmata>=1.1.0
 
+# Optional dependencies
+# pygame is optional - only needed for real game controller support
+# The virtual on-screen wheel works without pygame
+# If pygame installation fails, the app will still work perfectly
+pygame>=2.5.0
+
+# Alternative control method (optional)
+pyfirmata>=1.1.0

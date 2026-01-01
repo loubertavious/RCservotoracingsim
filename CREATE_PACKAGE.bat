@@ -58,6 +58,7 @@ if exist "docs\DISTRIBUTION_README.txt" copy "docs\DISTRIBUTION_README.txt" "%TE
 if exist "docs\ALTERNATIVE_METHODS.md" copy "docs\ALTERNATIVE_METHODS.md" "%TEMP_DIR%\docs\" >nul 2>&1
 if exist "docs\AUTO_LAUNCH_SETUP.md" copy "docs\AUTO_LAUNCH_SETUP.md" "%TEMP_DIR%\docs\" >nul 2>&1
 if exist "docs\FIX_COM_PORT.md" copy "docs\FIX_COM_PORT.md" "%TEMP_DIR%\docs\" >nul 2>&1
+if exist "docs\PYGAME_TROUBLESHOOTING.md" copy "docs\PYGAME_TROUBLESHOOTING.md" "%TEMP_DIR%\docs\" >nul 2>&1
 
 REM Supporting scripts (optional, but include for advanced users)
 if exist "scripts\run.bat" copy "scripts\run.bat" "%TEMP_DIR%\scripts\" >nul 2>&1

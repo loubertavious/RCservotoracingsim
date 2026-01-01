@@ -63,25 +63,45 @@ if not exist "main.py" (
 
 REM Check and install dependencies
 echo Checking dependencies...
-%PYTHON_CMD% -c "import pygame" >nul 2>&1
+%PYTHON_CMD% -c "import serial" >nul 2>&1
 if errorlevel 1 (
     echo [INFO] Installing required packages...
     echo This may take a few minutes on first run...
     echo.
     %PYTHON_CMD% -m pip install --upgrade pip --quiet
-    %PYTHON_CMD% -m pip install -r requirements.txt
+    %PYTHON_CMD% -m pip install pyserial
     if errorlevel 1 (
         echo.
-        echo [ERROR] Failed to install dependencies
+        echo [ERROR] Failed to install pyserial (required)
         echo Please check your internet connection and try again.
         echo.
         pause
         exit /b 1
     )
-    echo.
-    echo [OK] Dependencies installed successfully
+    echo [OK] Core dependencies installed
 ) else (
-    echo [OK] Dependencies already installed
+    echo [OK] Core dependencies already installed
+)
+
+REM Try to install pygame (optional - only needed for real game controllers)
+echo.
+echo Checking for pygame (optional - for real game controller support)...
+%PYTHON_CMD% -c "import pygame" >nul 2>&1
+if errorlevel 1 (
+    echo [INFO] pygame not found - attempting to install...
+    echo Note: If pygame installation fails, the app will still work
+    echo       with the virtual on-screen wheel (no real controllers needed)
+    echo.
+    %PYTHON_CMD% -m pip install pygame --quiet 2>nul
+    if errorlevel 1 (
+        echo [WARNING] pygame installation failed or skipped
+        echo [INFO] The app will work with virtual controller only
+        echo [INFO] Real game controllers will be disabled
+    ) else (
+        echo [OK] pygame installed successfully
+    )
+) else (
+    echo [OK] pygame already installed
 )
 
 echo.

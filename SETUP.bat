@@ -53,22 +53,38 @@ echo [OK] Python found:
 %PYTHON_CMD% --version
 echo.
 
-REM Install dependencies
+REM Install core dependencies (required)
 echo [2/4] Installing/updating dependencies...
 echo This may take a few minutes...
 echo.
 %PYTHON_CMD% -m pip install --upgrade pip --quiet
-%PYTHON_CMD% -m pip install -r requirements.txt
+echo Installing core dependencies (pyserial)...
+%PYTHON_CMD% -m pip install pyserial
 if errorlevel 1 (
     echo.
-    echo [WARNING] Some dependencies may have failed to install
-    echo The application may still work, but some features might not function.
+    echo [ERROR] Failed to install pyserial (required)
+    echo Please check your internet connection and try again.
     echo.
-) else (
-    echo.
-    echo [OK] All dependencies installed successfully
-    echo.
+    pause
+    exit /b 1
 )
+echo [OK] Core dependencies installed
+
+REM Try to install pygame (optional)
+echo.
+echo Attempting to install pygame (optional - for real game controller support)...
+echo Note: If pygame installation fails, the app will still work
+echo       with the virtual on-screen wheel (no real controllers needed)
+%PYTHON_CMD% -m pip install pygame --quiet 2>nul
+if errorlevel 1 (
+    echo [WARNING] pygame installation failed or skipped
+    echo [INFO] The app will work with virtual controller only
+    echo [INFO] Real game controllers will be disabled
+    echo [INFO] This is normal on some systems - pygame is optional
+) else (
+    echo [OK] pygame installed successfully
+)
+echo.
 
 REM Create desktop shortcut
 echo [3/4] Creating desktop shortcut...

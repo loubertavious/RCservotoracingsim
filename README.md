@@ -13,10 +13,14 @@ A Python application that allows you to control servos on an Arduino using racin
 ## Requirements
 
 - Python 3.7 or higher
-- Arduino (Uno, Nano, or compatible)
-- Servo motors
-- USB cable for Arduino
-- Game controller or racing wheel
+- pyserial (required - for Arduino communication)
+- pygame (optional - only needed for real game controllers)
+  - If pygame installation fails, the virtual on-screen wheel still works
+  - See `docs/PYGAME_TROUBLESHOOTING.md` for help
+- Arduino (Uno, Nano, or compatible) - optional, for servo control
+- Servo motors - optional, for physical control
+- USB cable for Arduino - optional
+- Game controller or racing wheel - optional, pygame required for real controllers
 
 ## Installation
 

@@ -1,4 +1,13 @@
-import pygame
+# Try to import pygame - it's optional (only needed for real game controllers)
+# The virtual on-screen wheel works without pygame
+try:
+    import pygame
+    PYGAME_AVAILABLE = True
+except ImportError:
+    PYGAME_AVAILABLE = False
+    print("[INFO] pygame not available - real game controllers disabled")
+    print("[INFO] Virtual on-screen wheel will still work")
+
 import serial
 import serial.tools.list_ports
 import threading
@@ -304,19 +313,36 @@ class WheelWidget(Canvas):
 
 class ControllerManager:
     def __init__(self):
-        pygame.init()
-        pygame.joystick.init()
+        self.pygame_available = PYGAME_AVAILABLE
         self.joysticks = []
         self.virtual_controller = VirtualController()
-        self.refresh_controllers()
+        
+        if self.pygame_available:
+            try:
+                pygame.init()
+                pygame.joystick.init()
+                self.refresh_controllers()
+            except Exception as e:
+                print(f"[WARNING] Failed to initialize pygame: {e}")
+                print("[INFO] Continuing with virtual controller only")
+                self.pygame_available = False
+                self.joysticks = []
+        else:
+            self.joysticks = []
         
     def refresh_controllers(self):
         """Refresh the list of connected controllers"""
         self.joysticks = []
-        for i in range(pygame.joystick.get_count()):
-            joystick = pygame.joystick.Joystick(i)
-            joystick.init()
-            self.joysticks.append(joystick)
+        if not self.pygame_available:
+            return 0
+        
+        try:
+            for i in range(pygame.joystick.get_count()):
+                joystick = pygame.joystick.Joystick(i)
+                joystick.init()
+                self.joysticks.append(joystick)
+        except Exception as e:
+            print(f"[WARNING] Error refreshing controllers: {e}")
         return len(self.joysticks)
     
     def get_controller_info(self, index):
@@ -809,6 +835,20 @@ class ServoControlApp:
             info = self.controller_manager.get_controller_info(i)
             controllers.append(f"{i}: {info['name']}")
         
+        # Show message if pygame is not available
+        if not self.controller_manager.pygame_available:
+            # Add a note in the controller info
+            self.controller_info_text.delete(1.0, END)
+            self.controller_info_text.insert(1.0, 
+                "⚠ pygame not available\n\n"
+                "Real game controllers are disabled.\n"
+                "The virtual on-screen wheel is still available.\n\n"
+                "To enable real controllers:\n"
+                "1. Install pygame: pip install pygame\n"
+                "2. Restart the application\n\n"
+                "Note: pygame installation may fail on some systems.\n"
+                "The virtual controller works without pygame.")
+        
         self.controller_combo['values'] = controllers
         if controllers:
             self.controller_combo.current(0)  # Select virtual controller by default
@@ -1039,7 +1079,12 @@ class ServoControlApp:
     def poll_loop(self):
         """Main polling loop"""
         while self.running:
-            pygame.event.pump()
+            # Only pump pygame events if pygame is available
+            if self.controller_manager.pygame_available:
+                try:
+                    pygame.event.pump()
+                except:
+                    pass
             
             # Update virtual controller arrow keys (continuous update while keys are held)
             selection = self.controller_var.get()
