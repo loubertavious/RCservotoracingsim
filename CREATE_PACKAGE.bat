@@ -35,6 +35,7 @@ copy "main.py" "%TEMP_DIR%\" >nul 2>&1
 copy "requirements.txt" "%TEMP_DIR%\" >nul 2>&1
 copy "LAUNCH.bat" "%TEMP_DIR%\" >nul 2>&1
 copy "SETUP.bat" "%TEMP_DIR%\" >nul 2>&1
+if exist "DIAGNOSE.bat" copy "DIAGNOSE.bat" "%TEMP_DIR%\" >nul 2>&1
 if exist "README.md" copy "README.md" "%TEMP_DIR%\" >nul 2>&1
 
 REM Create subdirectories in package
@@ -59,6 +60,7 @@ if exist "docs\ALTERNATIVE_METHODS.md" copy "docs\ALTERNATIVE_METHODS.md" "%TEMP
 if exist "docs\AUTO_LAUNCH_SETUP.md" copy "docs\AUTO_LAUNCH_SETUP.md" "%TEMP_DIR%\docs\" >nul 2>&1
 if exist "docs\FIX_COM_PORT.md" copy "docs\FIX_COM_PORT.md" "%TEMP_DIR%\docs\" >nul 2>&1
 if exist "docs\PYGAME_TROUBLESHOOTING.md" copy "docs\PYGAME_TROUBLESHOOTING.md" "%TEMP_DIR%\docs\" >nul 2>&1
+if exist "docs\TROUBLESHOOTING.md" copy "docs\TROUBLESHOOTING.md" "%TEMP_DIR%\docs\" >nul 2>&1
 
 REM Supporting scripts (optional, but include for advanced users)
 if exist "scripts\run.bat" copy "scripts\run.bat" "%TEMP_DIR%\scripts\" >nul 2>&1

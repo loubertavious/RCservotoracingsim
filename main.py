@@ -199,8 +199,8 @@ class WheelWidget(Canvas):
             y2 = self.center_y + math.sin(angle_rad) * spoke_length
             self.create_line(x1, y1, x2, y2, fill='#ffffff', width=2)
         
-        # Draw top indicator
-        indicator_angle = math.radians(display_angle)
+        # Draw top indicator (fixed at top of wheel, red)
+        indicator_angle = math.radians(-90)  # -90 degrees = top of wheel (fixed position)
         indicator_x = self.center_x + math.cos(indicator_angle) * (self.radius - 5)
         indicator_y = self.center_y + math.sin(indicator_angle) * (self.radius - 5)
         self.create_oval(
@@ -208,7 +208,7 @@ class WheelWidget(Canvas):
             indicator_y - 8,
             indicator_x + 8,
             indicator_y + 8,
-            fill='#00ff00',
+            fill='#ff0000',  # Red color
             outline='#ffffff',
             width=2
         )
@@ -549,6 +549,21 @@ class ServoControlApp:
         # Cache for stats to prevent unnecessary updates
         self.last_stats_text = ""
         
+        # Throttle UI updates to prevent freezing
+        self.ui_update_counter = 0
+        self.ui_update_interval = 2  # Update UI every 2 polling cycles (~10Hz instead of 20Hz)
+        self.pending_ui_updates = {
+            'wheel_angle': None,
+            'axis_charts': False,
+            'mapping_values': False,
+            'wheel_widget': None
+        }
+        
+        # Axis settings: gain and invert for each axis
+        self.axis_settings = {}  # {axis_id: {'gain': float, 'invert': bool}}
+        for i in range(16):  # Support up to 16 axes
+            self.axis_settings[i] = {'gain': 1.0, 'invert': False}
+        
         self.setup_ui()
         self.start_polling()
         
@@ -646,6 +661,54 @@ class ServoControlApp:
             axis_frame.columnconfigure(1, weight=1)
         
         axis_charts_frame.columnconfigure(0, weight=1)
+        
+        # Axis settings (gain and invert)
+        axis_settings_label = ttk.Label(left_panel, text="Axis Settings:", font=("Arial", 10, "bold"))
+        axis_settings_label.grid(row=6, column=0, columnspan=4, sticky=W, pady=(10, 5))
+        
+        axis_settings_frame = ttk.LabelFrame(left_panel, text="Gain & Invert", padding="5")
+        axis_settings_frame.grid(row=7, column=0, columnspan=4, sticky=(W, E), pady=5)
+        
+        # Create settings for first 4 axes (most common)
+        self.axis_settings_ui = []
+        for i in range(4):
+            axis_setting_frame = ttk.Frame(axis_settings_frame)
+            axis_setting_frame.grid(row=i, column=0, sticky=(W, E), pady=2)
+            
+            # Axis label
+            axis_name = axis_info[i][0].split('(')[0].strip()  # Get name without "(Axis X)"
+            ttk.Label(axis_setting_frame, text=f"{axis_name}:", font=("Arial", 9), width=12).grid(row=0, column=0, sticky=W, padx=5)
+            
+            # Gain slider
+            ttk.Label(axis_setting_frame, text="Gain:", font=("Arial", 8)).grid(row=0, column=1, sticky=W, padx=(10, 2))
+            gain_var = DoubleVar(value=1.0)
+            # Use a helper function to properly capture the index
+            def make_gain_callback(axis_idx):
+                return lambda v: self.on_axis_gain_change(axis_idx, v)
+            gain_scale = ttk.Scale(axis_setting_frame, from_=0.1, to=3.0, variable=gain_var, 
+                                  orient=HORIZONTAL, length=100, command=make_gain_callback(i))
+            gain_scale.grid(row=0, column=2, padx=2)
+            gain_label = ttk.Label(axis_setting_frame, text="1.00", font=("Arial", 8), width=5)
+            gain_label.grid(row=0, column=3, padx=2)
+            
+            # Invert checkbox
+            invert_var = BooleanVar(value=False)
+            # Use a helper function to properly capture the index
+            def make_invert_callback(axis_idx):
+                return lambda: self.on_axis_invert_change(axis_idx)
+            invert_check = ttk.Checkbutton(axis_setting_frame, text="Invert", variable=invert_var,
+                                          command=make_invert_callback(i))
+            invert_check.grid(row=0, column=4, padx=(10, 5))
+            
+            # Store UI elements
+            self.axis_settings_ui.append({
+                'gain_var': gain_var,
+                'gain_label': gain_label,
+                'invert_var': invert_var,
+                'axis_id': i
+            })
+        
+        axis_settings_frame.columnconfigure(0, weight=1)
         
         # Right panel - Tabbed interface
         right_panel = ttk.LabelFrame(main_frame, text="Controller & Servo Control", padding="10")
@@ -792,6 +855,7 @@ class ServoControlApp:
         left_panel.columnconfigure(1, weight=1)
         left_panel.rowconfigure(3, weight=1)
         axis_charts_frame.columnconfigure(0, weight=1)
+        axis_settings_frame.columnconfigure(0, weight=1)
         right_panel.columnconfigure(0, weight=1)
         right_panel.rowconfigure(0, weight=1)
         controller_tab.columnconfigure(0, weight=1)
@@ -890,6 +954,27 @@ class ServoControlApp:
             self.max_angle_label.config(text="Unlimited")
         else:
             self.max_angle_label.config(text=f"{max_angle:.0f}°")
+    
+    def on_axis_gain_change(self, axis_id, value=None):
+        """Update axis gain setting"""
+        if value is None:
+            return
+        try:
+            gain = float(value)
+            if axis_id in self.axis_settings:
+                self.axis_settings[axis_id]['gain'] = gain
+                # Update label
+                if axis_id < len(self.axis_settings_ui):
+                    self.axis_settings_ui[axis_id]['gain_label'].config(text=f"{gain:.2f}")
+        except:
+            pass
+    
+    def on_axis_invert_change(self, axis_id):
+        """Update axis invert setting"""
+        if axis_id < len(self.axis_settings_ui):
+            invert = self.axis_settings_ui[axis_id]['invert_var'].get()
+            if axis_id in self.axis_settings:
+                self.axis_settings[axis_id]['invert'] = invert
     
     def refresh_ports(self):
         """Refresh serial port list"""
@@ -1046,7 +1131,7 @@ class ServoControlApp:
             print(f"Error updating mapping display: {e}")
     
     def get_mapping_value(self, mapping):
-        """Get current value for a mapping"""
+        """Get current value for a mapping (with axis settings applied)"""
         try:
             state = self.controller_manager.get_controller_state(mapping['controller'])
             if not state:
@@ -1057,7 +1142,16 @@ class ServoControlApp:
             
             if input_type == 'axis':
                 if input_id < len(state['axes']):
-                    return state['axes'][input_id]
+                    value = state['axes'][input_id]
+                    # Apply axis settings (gain and invert)
+                    if input_id in self.axis_settings:
+                        settings = self.axis_settings[input_id]
+                        value = value * settings['gain']  # Apply gain
+                        if settings['invert']:
+                            value = -value  # Invert if enabled
+                        # Clamp to valid range after gain
+                        value = max(-1.0, min(1.0, value))
+                    return value
             elif input_type == 'button':
                 if input_id < len(state['buttons']):
                     return 1 if state['buttons'][input_id] else 0
@@ -1094,53 +1188,85 @@ class ServoControlApp:
                 vc.update_arrow_keys(vc.arrow_keys['left'], vc.arrow_keys['right'], 
                                     vc.arrow_keys['up'], vc.arrow_keys['down'])
                 
-                # Update wheel widget visual (continuous rotation)
-                self.root.after(0, lambda: self.wheel_widget.set_angle(vc.wheel_angle))
+                # Store wheel angle for batched UI update
+                self.pending_ui_updates['wheel_widget'] = vc.wheel_angle
             
-            # Update stats
-            self.update_stats()
-            
-            # Update visual axis charts
-            self.root.after(0, self.update_axis_charts)
-            
-            # Update wheel angle (assuming axis 0 is steering wheel)
-            self.update_wheel_angle()
-            
-            # Process mappings and send to Arduino
+            # Process mappings and send to Arduino (always do this - it's critical)
             self.process_mappings()
             
             # Read Arduino responses (non-blocking)
             if self.arduino_manager.connected:
                 responses = self.arduino_manager.read_responses()
             
-            # Update mapping display values only (don't recreate items, just update values)
-            self.root.after(0, self.update_mapping_values)
+            # Throttle UI updates to prevent freezing
+            self.ui_update_counter += 1
+            if self.ui_update_counter >= self.ui_update_interval:
+                self.ui_update_counter = 0
+                
+                # Batch all UI updates into a single after() call to prevent queue buildup
+                self.root.after_idle(self._batch_ui_updates)
             
-            time.sleep(0.05)  # ~20Hz update rate
+            time.sleep(0.05)  # ~20Hz update rate for input polling
+    
+    def _batch_ui_updates(self):
+        """Batch all UI updates together to prevent freezing"""
+        try:
+            # Update stats (only if changed)
+            self.update_stats()
+            
+            # Update wheel angle display
+            self.update_wheel_angle()
+            
+            # Update visual axis charts
+            self.update_axis_charts()
+            
+            # Update wheel widget if needed
+            if self.pending_ui_updates['wheel_widget'] is not None:
+                angle = self.pending_ui_updates['wheel_widget']
+                self.pending_ui_updates['wheel_widget'] = None
+                self.wheel_widget.set_angle(angle)
+            
+            # Update mapping display values
+            self.update_mapping_values()
+        except Exception as e:
+            # Silently handle errors to prevent spam
+            pass
     
     def update_mapping_values(self):
         """Update only the values in existing mapping tree items (for real-time updates)"""
         try:
-            # Update values for existing items
-            for item_id in self.mapping_tree.get_children():
-                item_values = list(self.mapping_tree.item(item_id, 'values'))
-                if len(item_values) >= 4:
-                    servo_id = int(item_values[0])
-                    if servo_id in self.mappings:
-                        mapping = self.mappings[servo_id]
-                        # Get current value
-                        value = self.get_mapping_value(mapping)
-                        value_str = f"{value:.2f}" if isinstance(value, float) else str(value)
-                        # Update the value column (index 4)
-                        new_values = list(item_values)
-                        if len(new_values) >= 5:
-                            new_values[4] = value_str
-                        else:
-                            new_values.append(value_str)
-                        self.mapping_tree.item(item_id, values=tuple(new_values))
+            # Only update if treeview exists and has items
+            if not hasattr(self, 'mapping_tree'):
+                return
+            
+            # Update values for existing items (limit to prevent freezing)
+            items = list(self.mapping_tree.get_children())
+            if len(items) > 20:  # If too many items, skip update to prevent freeze
+                return
+            
+            for item_id in items:
+                try:
+                    item_values = list(self.mapping_tree.item(item_id, 'values'))
+                    if len(item_values) >= 4:
+                        servo_id = int(item_values[0])
+                        if servo_id in self.mappings:
+                            mapping = self.mappings[servo_id]
+                            # Get current value
+                            value = self.get_mapping_value(mapping)
+                            value_str = f"{value:.2f}" if isinstance(value, float) else str(value)
+                            # Update the value column (index 4)
+                            new_values = list(item_values)
+                            if len(new_values) >= 5:
+                                new_values[4] = value_str
+                            else:
+                                new_values.append(value_str)
+                            self.mapping_tree.item(item_id, values=tuple(new_values))
+                except:
+                    # Skip individual item errors
+                    continue
         except Exception as e:
-            # If update fails, do a full refresh
-            self.update_mapping_display()
+            # If update fails, don't do full refresh (too expensive)
+            pass
     
     def update_stats(self):
         """Update input statistics display"""
@@ -1166,6 +1292,16 @@ class ServoControlApp:
             # Common racing wheel axes (only show first 4, which are typically steering, throttle, brake, clutch)
             axis_names = ["Steering", "Throttle", "Brake", "Clutch"]
             for i, value in enumerate(state['axes'][:4]):  # Only show first 4 axes
+                # Apply axis settings (gain and invert) for display
+                raw_value = value
+                if i in self.axis_settings:
+                    settings = self.axis_settings[i]
+                    value = value * settings['gain']  # Apply gain
+                    if settings['invert']:
+                        value = -value  # Invert if enabled
+                    # Clamp to valid range after gain
+                    value = max(-1.0, min(1.0, value))
+                
                 # Always show axis 0 (steering), axis 1 (throttle), and axis 2 (brake)
                 # Others only if significant
                 if abs(value) > 0.001 or i <= 2:
@@ -1221,26 +1357,38 @@ class ServoControlApp:
             if not state or not state['axes']:
                 return
             
-            # Update each axis chart
+            # Update each axis chart (limit operations to prevent freezing)
             for i, chart in enumerate(self.axis_charts):
                 if i < len(state['axes']):
                     value = state['axes'][i]
+                    # Apply axis settings (gain and invert) for display
+                    if i in self.axis_settings:
+                        settings = self.axis_settings[i]
+                        value = value * settings['gain']  # Apply gain
+                        if settings['invert']:
+                            value = -value  # Invert if enabled
+                        # Clamp to valid range after gain
+                        value = max(-1.0, min(1.0, value))
                     canvas = chart['canvas']
                     color1 = chart['color1']
                     color2 = chart['color2']
                     value_label = chart['value_label']
                     
-                    # Clear canvas
-                    canvas.delete("all")
+                    # Get canvas dimensions (cache if possible to avoid repeated calls)
+                    try:
+                        canvas.update_idletasks()
+                        width = canvas.winfo_width()
+                        height = canvas.winfo_height()
+                        if width < 10:
+                            width = 250  # Default width
+                        if height < 10:
+                            height = 30  # Default height
+                    except:
+                        # If canvas not ready, skip this update
+                        continue
                     
-                    # Get canvas dimensions
-                    canvas.update_idletasks()
-                    width = canvas.winfo_width()
-                    height = canvas.winfo_height()
-                    if width < 10:
-                        width = 250  # Default width
-                    if height < 10:
-                        height = 30  # Default height
+                    # Clear canvas (only if needed - check if value changed significantly)
+                    canvas.delete("all")
                     
                     # Draw background track
                     margin = 3
@@ -1255,50 +1403,22 @@ class ServoControlApp:
                     bar_width = abs(value) * bar_max_width
                     
                     if abs(value) > 0.001:  # Only draw if significant
+                        # Simplified drawing - use solid color instead of expensive gradient
+                        # This prevents freezing during rapid updates
                         if value >= 0:
-                            # Positive value - gradient bar extends right from center
+                            # Positive value - bar extends right from center
                             bar_x1 = center_x
                             bar_x2 = center_x + bar_width
-                            
-                            # Create gradient effect (lighter to darker from center to edge)
-                            steps = max(10, int(bar_width))
-                            for step in range(steps):
-                                x1 = bar_x1 + (step / steps) * bar_width
-                                x2 = bar_x1 + ((step + 1) / steps) * bar_width
-                                
-                                # Interpolate color from color1 (lighter) to color2 (darker)
-                                ratio = step / steps
-                                r1, g1, b1 = tuple(int(color1[j:j+2], 16) for j in (1, 3, 5))
-                                r2, g2, b2 = tuple(int(color2[j:j+2], 16) for j in (1, 3, 5))
-                                r = int(r1 + (r2 - r1) * ratio)
-                                g = int(g1 + (g2 - g1) * ratio)
-                                b = int(b1 + (b2 - b1) * ratio)
-                                color = f"#{r:02x}{g:02x}{b:02x}"
-                                
-                                canvas.create_rectangle(x1, margin, x2, height - margin,
-                                                      fill=color, outline=color, width=0)
+                            # Use color1 (lighter) for simplicity and performance
+                            canvas.create_rectangle(bar_x1, margin, bar_x2, height - margin,
+                                                  fill=color1, outline=color1, width=0)
                         else:
-                            # Negative value - gradient bar extends left from center
+                            # Negative value - bar extends left from center
                             bar_x1 = center_x - bar_width
                             bar_x2 = center_x
-                            
-                            # Create gradient effect (lighter to darker from center to edge)
-                            steps = max(10, int(bar_width))
-                            for step in range(steps):
-                                x1 = bar_x2 - ((step + 1) / steps) * bar_width
-                                x2 = bar_x2 - (step / steps) * bar_width
-                                
-                                # Interpolate color from color1 (lighter) to color2 (darker)
-                                ratio = step / steps
-                                r1, g1, b1 = tuple(int(color1[j:j+2], 16) for j in (1, 3, 5))
-                                r2, g2, b2 = tuple(int(color2[j:j+2], 16) for j in (1, 3, 5))
-                                r = int(r1 + (r2 - r1) * ratio)
-                                g = int(g1 + (g2 - g1) * ratio)
-                                b = int(b1 + (b2 - b1) * ratio)
-                                color = f"#{r:02x}{g:02x}{b:02x}"
-                                
-                                canvas.create_rectangle(x1, margin, x2, height - margin,
-                                                      fill=color, outline=color, width=0)
+                            # Use color1 (lighter) for simplicity and performance
+                            canvas.create_rectangle(bar_x1, margin, bar_x2, height - margin,
+                                                  fill=color1, outline=color1, width=0)
                     
                     # Draw center line
                     canvas.create_line(center_x, margin, center_x, height - margin,
@@ -1354,27 +1474,31 @@ class ServoControlApp:
     
     def process_mappings(self):
         """Process all mappings and send commands to Arduino"""
-        for servo_id, mapping in self.mappings.items():
-            value = self.get_mapping_value(mapping)
-            
-            # Convert value to servo angle (0-180)
-            if mapping['input_type'] == 'axis':
-                # Map from -1.0 to 1.0 to 0-180
-                angle = int((value + 1.0) * 90)  # -1 -> 0, 0 -> 90, 1 -> 180
-            elif mapping['input_type'] == 'button':
-                # Button: 0 or 90 degrees (or could be 0/180)
-                angle = 90 if value > 0 else 0
-            elif mapping['input_type'] == 'hat':
-                # Hat: map -1/0/1 to 0/90/180
-                angle = int((value + 1.0) * 90)
-            else:
-                angle = 90  # Default center position
-            
-            # Clamp angle
-            angle = max(0, min(180, angle))
-            
-            # Send to Arduino
-            self.arduino_manager.send_servo_command(servo_id, angle)
+        try:
+            for servo_id, mapping in self.mappings.items():
+                value = self.get_mapping_value(mapping)
+                
+                # Convert value to servo angle (0-180)
+                if mapping['input_type'] == 'axis':
+                    # Map from -1.0 to 1.0 to 0-180
+                    angle = int((value + 1.0) * 90)  # -1 -> 0, 0 -> 90, 1 -> 180
+                elif mapping['input_type'] == 'button':
+                    # Button: 0 or 90 degrees (or could be 0/180)
+                    angle = 90 if value > 0 else 0
+                elif mapping['input_type'] == 'hat':
+                    # Hat: map -1/0/1 to 0/90/180
+                    angle = int((value + 1.0) * 90)
+                else:
+                    angle = 90  # Default center position
+                
+                # Clamp angle
+                angle = max(0, min(180, angle))
+                
+                # Send to Arduino (non-blocking, handles errors internally)
+                self.arduino_manager.send_servo_command(servo_id, angle)
+        except Exception as e:
+            # Silently handle errors to prevent freezing
+            pass
     
     def on_closing(self):
         """Clean up on window close"""
